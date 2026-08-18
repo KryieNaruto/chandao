@@ -18,6 +18,11 @@ add_executable(main WIN32
 
 target_link_libraries(main PRIVATE Qt6::Widgets)
 
+# Visual Studio 调试时自动把 Qt 的 bin 目录加入 PATH，避免提示缺少 Qt DLL
+if(WIN32 AND MSVC)
+    set_property(TARGET main PROPERTY VS_DEBUGGER_ENVIRONMENT "PATH=$<TARGET_FILE_DIR:Qt6::Core>;$(PATH)")
+endif()
+
 # Vulkan 为可选：有 SDK 则启用，没有也不要导致配置/编译失败
 find_package(Vulkan QUIET)
 if(Vulkan_FOUND)
