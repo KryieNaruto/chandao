@@ -90,6 +90,33 @@ git remote -v
 # origin  https://github.com/KryieNaruto/chandao.git (push)
 ```
 
+## 专注计时器 Demo 迭代（2026-08-18）
+
+### 本次交付内容
+
+- 在 `main/src/` 新增 `focus_timer_widget.h` / `focus_timer_widget.cpp`：自定义 100×100 专注计时控件。
+- 重写 `main/src/main.cpp`：使用 `FocusTimerWidget` 作为中央控件，窗口标题为「专注」，固定尺寸 100×100，保留系统标题栏（含关闭按钮）。
+- 更新 `main/CMakeLists.txt`：将新源文件加入 `main` 可执行目标。
+
+### 界面与行为
+
+- 仅保留圆形环绕刻度条与蓝色主按钮；标题文字、中间装饰图案、右侧省略号按钮均已去除。
+- 背景色 `#2B2B2B`，激活刻度 `#55B2E8`，未激活刻度 `#3D3D3D`，暂停图标黑色。
+- 36 个圆角矩形刻度自 3 点钟方向起，顺时针随进度变蓝。
+- 默认工作时长 10 秒，工作结束后圆环全部变灰并进入 3 秒休息；休息结束后自动开始下一轮工作。
+- 蓝色主按钮可暂停 / 继续计时；暂停时按钮显示黑色播放三角形，运行时显示黑色暂停双竖线。
+
+### 构建与验证
+
+```powershell
+cmake --build _build --config Release
+cmake --install _build --config Release
+```
+
+- 编译成功，生成 `_build/main/Release/main.exe`。
+- 安装成功，`_install/main.exe` 已更新，Qt 运行依赖已自动部署。
+- 运行验证：程序正常启动并持续运行，无崩溃，仅 Qt 样式相关 libpng 警告（不影响功能）。
+
 ## 后续建议
 
 1. 下载安装 Qt 6.8.3 MSVC 2022_64 到其他机器时，可调整 `-DCMAKE_PREFIX_PATH` 指向实际路径。

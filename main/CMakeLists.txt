@@ -12,6 +12,8 @@ find_package(Qt6 REQUIRED COMPONENTS Widgets)
 
 add_executable(main WIN32
     src/main.cpp
+    src/focus_timer_widget.h
+    src/focus_timer_widget.cpp
 )
 
 target_link_libraries(main PRIVATE Qt6::Widgets)
