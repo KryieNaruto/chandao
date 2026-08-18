@@ -2,6 +2,9 @@
 _build/
 _install/
 
+# 临时凭证（不提交）
+.github_token
+
 # 用户/IDE 文件
 .vs/
 *.user
