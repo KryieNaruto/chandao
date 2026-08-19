@@ -153,3 +153,60 @@
 
 - 未执行 `cmake --install`，未做运行态验证（跨工作→休息边界的恢复显示与任务栏闪烁、托盘/截图回归），完整验收由测试 Agent 负责。
 - 无阻塞。
+
+## 2026-08-19 交付执行（按钮下移白图标 / 「...」按钮 / 设置弹窗 / 时长持久化 / HH:MM:SS）
+
+### 做了什么
+
+按 `plan/delivery-plan.md`「任务拆分」全部 6 项执行：
+
+1. **播放/暂停按钮下移 + 图标白色**：`drawButton` 与 `buttonRect` 中心 y 由 `h*0.78` 下移至 `h*0.86`（半径不变 `base*0.05`）；`drawPauseIcon` / `drawPlayIcon` 图标颜色 `#101010` → `#FFFFFF`。
+2. **「...」按钮**：`dotsButtonRect()` 中心 `(w*0.5 + base*0.11, h*0.86)`（与播放按钮同一水平线右侧），半径 `base*0.04`；`drawDotsButton` 自绘三个横向圆点（点径 `base*0.008`，间距 `r*0.55`），颜色由未激活灰提亮（`m_inactiveColor.lighter(200 + 120*m_dotsHoverT)`），悬停时浮现浅灰圆底（alpha 0.10*m_dotsHoverT），复用 60fps `updateTimer` 插值机制（新增独立 `m_dotsHoverT`/`m_dotsHovered`/`m_dotsPressed`）；点击（按下+松开在热区内）发 `dotsClicked` 信号；未命中热区的鼠标按下/松开/移动事件全部 `event->ignore()` 交还父窗口，`FramelessWindow::mousePressEvent` 同步将 dots 热区排除在拖拽判定外。
+3. **下拉菜单**：归属 `FocusTimerWidget`（`showDotsMenu`），点击「...」弹出 `QMenu`（深色样式表：背景 `#2B2B2B`、文字 `#E8E8E8`、选中 `#55B2E8`、边框 `#3D3D3D`），含 action「设置」，经 `mapToGlobal` 弹出在按钮正下方 4px。
+4. **设置弹窗**：新增 `main/src/settings_dialog.h/.cpp`，`SettingsDialog : QDialog`（`Qt::Dialog | Qt::FramelessWindowHint`，固定 320×220，背景 `#2B2B2B`）；右上角自绘 ×（点击 `reject()` 取消不保存）；两行「专注时间」「休息时间」各一个 `QTimeEdit`（`displayFormat "HH:mm:ss"`，深色样式 `#3D3D3D` 底 / `#E8E8E8` 字）；中间偏下「确定」按钮（扁平 `#55B2E8` 底白字，`accept()`）；顶部 40px 标题区（不含 × 热区）支持按住拖拽移动；弹出时居中于父窗口；时长输入上限钳到 23:59:59（QTimeEdit 上限）。已加入 `main/CMakeLists.txt` 的 `main` 目标。
+5. **时长应用 + 持久化**：`FocusTimerWidget::setDurations(double workSec, double restSec)`——非正数直接拒绝；先存新时长，当前阶段若 `m_elapsed >= 新时长` 则立即切到下一阶段、`m_elapsed = 0`、发 `phaseChanged`（`m_timerStopped` 截图模式不发），否则续跑（剩余 = 新时长 - 已用，天然满足）；非当前阶段时长仅更新存储值。「确定」后在 `openSettingsDialog` 内用 `QSettings("Chandao","FocusTimer")` 写 `workSeconds`/`restSeconds`；`main.cpp` 交互模式启动时读取（默认 10.0/10.0）并经 `FramelessWindow::timerWidget()` 新访问器调用 `setDurations`；截图模式（`-t`）不加载，始终默认 10s/10s。
+6. **中心时间 HH:MM:SS**：`drawCenterTimeText` 改为 `%1:%2:%3`（均补零两位，如 `00:00:07`），字号由 `base*0.12` 调小为 `base*0.075`，绘制框半宽由 `base*0.15` 放宽为 `base*0.22`，保证 8 字符在圆环内完整显示；取下限改为 `qMax(0, ...)`。
+
+### 改了哪些文件
+
+- `main/src/focus_timer_widget.h`：`dotsButtonHit`、`setDurations`、`workSeconds`/`restSeconds`、`dotsClicked` 信号、`drawDotsButton`/`dotsButtonRect`/`showDotsMenu`/`openSettingsDialog` 声明、dots 动画状态成员。
+- `main/src/focus_timer_widget.cpp`：上述全部实现 + 按钮下移、图标白色、中心 HH:MM:SS、鼠标事件热区扩展（未命中仍 `ignore()`）、`updateTimer` 增加 `m_dotsHoverT` 插值。
+- `main/src/settings_dialog.h` / `main/src/settings_dialog.cpp`：新增设置弹窗。
+- `main/src/frameless_window.h`：新增 `timerWidget()` 访问器。
+- `main/src/frameless_window.cpp`：拖拽判定排除 dots 热区。
+- `main/src/main.cpp`：交互模式启动加载 QSettings 并调用 `setDurations`。
+- `main/CMakeLists.txt`：`main` 目标加入 `settings_dialog.h/.cpp`。
+- `plan/execution-log.md`：追加本段。
+
+### 编译自检
+
+- `cmake --build _build --config Release` 通过（CMake 因 CMakeLists 变更自动重配，Vulkan 仍未找到按预期跳过），`main.exe` 生成成功，无编译错误。
+
+### 未做事项 / 阻塞
+
+- 未执行 `cmake --install`，未做截图回归（`-t 1/1.5/13` 尺寸与退出码、`-t 3` 按钮位置/白图标/三点/HH:MM:SS 核验）与人工交互验收（「...」→「设置」→改时长→确定生效、× 不保存、重启保持、拖拽/托盘/边缘缩放回归），由测试 Agent 负责。
+- 按钮最终参数：播放/暂停按钮中心 `(w*0.5, h*0.86)`、半径 `base*0.05`；「...」按钮中心 `(w*0.5 + base*0.11, h*0.86)`、半径 `base*0.04`（`base = min(w,h)`），均未再微调，若截图验收认为间距不理想可在此基础上调。
+- 设置弹窗时长上限 23:59:59（`QTimeEdit`/`QTime` 限制），更长的跨天时长不支持（计划未要求）。
+- 无阻塞。
+
+## 2026-08-19 交付执行 round 2 修复（「...」圆点颜色非白色）
+
+### 做了什么
+
+- 测试 round 1 FAIL 唯一未达标项：「...」按钮三个圆点实测为灰色 (122,122,122)，计划要求白色。
+- 按排查结论最小修复：`drawDotsButton` 中圆点颜色原用 `m_inactiveColor.lighter(200 + 120*m_dotsHoverT)`，基色 `#3D3D3D` 提亮上限约 (195,195,195)，永远到不了白色；改为直接纯白 `#FFFFFF`，悬停反馈仍由既有的浅灰圆底（alpha 0.10*m_dotsHoverT）承担，与播放按钮白色图标风格统一。
+- 未动其他任何逻辑。
+
+### 改了哪些文件
+
+- `main/src/focus_timer_widget.cpp`：`drawDotsButton` 圆点颜色一行改动（含注释更新）。
+- `plan/execution-log.md`：追加本段。
+
+### 编译自检
+
+- `cmake --build _build --config Release` 通过，`main.exe` 重新生成成功，无编译错误。
+
+### 未做事项 / 阻塞
+
+- 未执行 `cmake --install` 与完整复测（`-t 3` 圆点白色像素检测等），由测试 Agent 在 round 2 复测。
+- 无阻塞。

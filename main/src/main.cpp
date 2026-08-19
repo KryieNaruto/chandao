@@ -2,6 +2,7 @@
 #include <QPixmap>
 #include <QImage>
 #include <QStringList>
+#include <QSettings>
 #include "focus_timer_widget.h"
 #include "frameless_window.h"
 
@@ -51,6 +52,13 @@ int main(int argc, char *argv[])
     // 交互模式：无边框窗口（尺寸/居中在 FramelessWindow 构造中完成）
     FramelessWindow window;
     window.setWindowTitle(QStringLiteral("专注"));
+
+    // 加载持久化的专注/休息时长（截图模式不加载，始终默认 10s/10s）
+    QSettings settings(QStringLiteral("Chandao"), QStringLiteral("FocusTimer"));
+    const double workSec = settings.value(QStringLiteral("workSeconds"), 10.0).toDouble();
+    const double restSec = settings.value(QStringLiteral("restSeconds"), 10.0).toDouble();
+    window.timerWidget()->setDurations(workSec, restSec);
+
     window.show();
     return app.exec();
 }

@@ -145,8 +145,8 @@ void FramelessWindow::mousePressEvent(QMouseEvent *event)
         hide();
         return;
     }
-    // 播放按钮交给控件自己处理，不触发窗口拖拽
-    if (m_timerWidget->playButtonHit(pos)) {
+    // 播放按钮 / 「...」按钮交给控件自己处理，不触发窗口拖拽
+    if (m_timerWidget->playButtonHit(pos) || m_timerWidget->dotsButtonHit(pos)) {
         QMainWindow::mousePressEvent(event);
         return;
     }

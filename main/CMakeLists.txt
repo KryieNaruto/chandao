@@ -16,6 +16,8 @@ add_executable(main WIN32
     src/focus_timer_widget.cpp
     src/frameless_window.h
     src/frameless_window.cpp
+    src/settings_dialog.h
+    src/settings_dialog.cpp
 )
 
 target_link_libraries(main PRIVATE Qt6::Widgets)

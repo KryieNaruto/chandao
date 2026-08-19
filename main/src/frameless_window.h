@@ -17,6 +17,8 @@ class FramelessWindow : public QMainWindow
 public:
     explicit FramelessWindow(QWidget *parent = nullptr);
 
+    FocusTimerWidget *timerWidget() const { return m_timerWidget; }
+
 protected:
     void mousePressEvent(QMouseEvent *event) override;
     void mouseMoveEvent(QMouseEvent *event) override;

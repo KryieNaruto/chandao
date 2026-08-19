@@ -27,9 +27,16 @@ public:
     // 确定性地将计时状态设置为指定秒数（按工作/休息循环取模），并停止内部定时器
     void setTime(double seconds);
 
-    // 供无边框窗口使用：命中右上角关闭按钮 / 播放按钮热区
+    // 供无边框窗口使用：命中右上角关闭按钮 / 播放按钮 / 「...」按钮热区
     bool closeButtonHit(const QPoint &pos) const;
     bool playButtonHit(const QPoint &pos) const;
+    bool dotsButtonHit(const QPoint &pos) const;
+
+    // 应用新的工作/休息时长（秒）。当前阶段：新时长 > 已用则续跑，
+    // 已用 >= 新时长则立即切到下一阶段（信号规则与 updateTimer 一致）
+    void setDurations(double workSec, double restSec);
+    double workSeconds() const { return m_workDuration; }
+    double restSeconds() const { return m_restDuration; }
 
     // 圆环中心内容模式
     enum class CenterMode { TimeText, Plant };
@@ -42,6 +49,8 @@ public:
 signals:
     // 阶段切换：0 = 工作，1 = 休息（setTime 截图模式不触发）
     void phaseChanged(int state);
+    // 「...」按钮点击
+    void dotsClicked();
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -57,11 +66,15 @@ private slots:
 private:
     void drawRing(QPainter &p);
     void drawButton(QPainter &p);
+    void drawDotsButton(QPainter &p);
     void drawCloseButton(QPainter &p);
     void drawCenterContent(QPainter &p);
     void drawCenterTimeText(QPainter &p);
     QRect buttonRect() const;
+    QRect dotsButtonRect() const;
     QRect closeButtonRect() const;
+    void showDotsMenu();
+    void openSettingsDialog();
     void drawPauseIcon(QPainter &p, const QPointF &c, double r, double alpha);
     void drawPlayIcon(QPainter &p, const QPointF &c, double r, double alpha);
     static double approach(double value, double target, double step);
@@ -81,9 +94,12 @@ private:
     double m_pressT = 0.0;  // 播放按钮按压（1 = 完全按下）
     double m_iconT  = 1.0;  // 图标过渡：1 = 暂停图标，0 = 播放图标
     double m_closeHoverT = 0.0; // 关闭按钮悬停提亮
+    double m_dotsHoverT = 0.0;  // 「...」按钮悬停提亮
     bool m_buttonHovered = false;
     bool m_buttonPressed = false;
     bool m_closeHovered = false;
+    bool m_dotsHovered = false;
+    bool m_dotsPressed = false;
     bool m_timerStopped = false; // setTime 停止定时器后置位，不再触发动画插值
     CenterMode m_centerMode = CenterMode::TimeText;
 };

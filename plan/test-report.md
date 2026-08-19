@@ -480,3 +480,133 @@
   1. 保存前 `image = image.scaled(size, size)`（当 `image.width() != size` 时）；
   2. 或对 grab 结果设置 `setDevicePixelRatio(1.0)` 后缩放回逻辑尺寸；
   3. 或截图模式下调用 `QGuiApplication::setHighDpiScaleFactorRoundingPolicy` / 设置环境变量 `QT_SCALE_FACTOR=1` 后按 1.0 DPR 渲染。
+
+---
+
+# 交付测试报告 — 按钮下移白图标 / 「...」按钮 / 设置弹窗 / 时长持久化 / HH:MM:SS — Round 1 / 5
+
+- 测试时间：2026-08-19 10:16–10:25（UTC+8）
+- 测试环境：Windows 11 (26200)，PowerShell + Python 3.14.7 / Pillow 12.3.0，显示器缩放 200%（DPR=2）
+- 截图工作目录：`D:\qsw\禅道\_shottest\round4`；像素分析脚本：`_shottest\round4\analyze_round4.py`（测试辅助，非产品源码）
+- 对应需求：`plan/delivery-plan.md`「需求原文」——播放/暂停按钮下移且图标改白；新增「...」按钮+下拉菜单+设置弹窗（HH:MM:SS 时长、QSettings 持久化）；中心时间改 HH:MM:SS
+
+## 结论：**FAIL**
+
+10 项自动化检查通过 9 项；唯一失败项为验收标准 3c：「...」按钮三个圆点**位置与可见性达标，但颜色为灰色 #7A7A7A，不是计划规定的白色**（计划第 30 行「自绘三个白色横向圆点」，验收标准「三个白点可见」）。实现使用 `m_inactiveColor.lighter(200 + 120*hover)`，基色 #3D3D3D 提亮 200% 后仅得 (122,122,122)，即使悬停拉满（lighter(320)）也只有约 (195,195,195)，任何状态下都达不到白色。其余全部验收项（构建/安装、截图回归、按钮下移、白色暂停图标、HH:MM:SS、setDurations 分支、截图模式不加载 QSettings、无参 5 秒稳定、事件链回归）均通过。
+
+## 1. 构建与安装（Release）—— PASS
+
+| 命令 | 期望退出码 | 实际退出码 | 结果 |
+|---|---|---|---|
+| `cmake --build _build --config Release` | 0 | 0（`main.vcxproj -> _build\main\Release\main.exe`） | PASS |
+| `cmake --install _build --config Release` | 0 | 0（`-- Installing: _install/main.exe` + windeployqt） | PASS |
+
+- 产物佐证：`_install/main.exe` LastWriteTime **2026-08-19 10:15:12**，77824 字节（上一轮 49152 字节，体积变化与新增设置弹窗/菜单代码相符），为本次构建后的最新产物。
+- windeployqt 两条无害警告（缺 translations、缺 dxcompiler.dll），与既往轮次相同，不影响运行。
+
+## 2. 截图回归 —— PASS
+
+命令均在 `_shottest\round4` 下以 `Start-Process -Wait -PassThru` 同步执行取真实退出码：
+
+| 命令 | 退出码 | 产物 | 尺寸 | 结果 |
+|---|---|---|---|---|
+| `main.exe -t 1` | 0 | `shot_1.png` (16995 B) | 严格 400×400 | PASS |
+| `main.exe -t 1.5` | 0 | `shot_1.5.png` (17693 B) | 严格 400×400 | PASS |
+| `main.exe -t 3` | 0 | `shot_3.png` (18382 B) | 严格 400×400 | PASS |
+| `main.exe -t 13` | 0 | `shot_13.png` (21154 B) | 严格 400×400 | PASS |
+
+- 四条命令均秒级返回、退出码 0，截图模式未弹窗（进程立即退出，无窗口驻留）。
+- 蓝色像素趋势：圆环区域（半径 90~134px）蓝色像素 t=1 为 **970**，t=1.5 为 **1436**，1.5s > 1s 成立（PASS）。
+- `-t 13` 为休息阶段：中心区蓝色像素 1020、亮色像素 0，中心数字为蓝色（休息配色），PASS。
+
+## 3. 截图验证新 UI（`-t 3`，400×400）
+
+像素分析脚本 `analyze_round4.py` 输出（脚本退出码 1，因 3c 失败）：
+
+| 验收项 | 实测证据 | 结果 |
+|---|---|---|
+| a. 播放按钮中心 y/边长 ≥ 0.83 | 下半区蓝色按钮像素 1081 个，质心 (199.7, 335.6)，**y/边长 = 0.839** | PASS |
+| b. 按钮图标为白色 | 按钮中心区近白（#FFFFFF±20）像素 **108** 个，暂停双竖线清晰 | PASS |
+| c. 「...」三个白点可见 | 三点存在于按钮右侧同一水平线（实测圆点中心约 x=230/240/248, y=344，与播放按钮 y=344 同线），**但像素值为 (122,122,122) 灰色，非白色** | **FAIL** |
+| d. 中心时间 HH:MM:SS | 中心亮色文字包围盒宽 124px × 高 23px（宽远大于 4 位纯秒数）；人工判读 `shot_3.png` 确认显示 **「00:00:07」** | PASS |
+
+- 人工判读佐证：`shot_3.png` 全图可见——中心「00:00:07」、蓝色播放按钮下移至圆环下方、白色暂停双竖线、右侧「...」三点（灰色）、右上角 ×；放大图 `_shottest\round4\zoom_shot3_bottom.png` 确认三点位置与颜色。
+
+## 4. 设置应用逻辑（代码审查）—— PASS
+
+- `focus_timer_widget.cpp` `setDurations`（68–87 行）：非正数直接拒绝；先存新时长；当前阶段 `m_elapsed >= 新时长` → 立即切到下一阶段、`m_elapsed = 0`、发 `phaseChanged`；否则 `m_elapsed` 不动即续跑（剩余 = 新时长 - 已用）。分支与对齐结论一致。
+- 截图模式不发 `phaseChanged`：`setTime` 置 `m_timerStopped = true`，`setDurations` 内 `if (!m_timerStopped)` 才 emit，PASS。
+- `main.cpp`：QSettings 读取（57–60 行）仅在不带 `-t` 的交互分支；截图分支（27–50 行）无任何 QSettings 调用，始终默认 10s/10s，PASS。
+
+## 5. 无参启动 5 秒稳定性 —— PASS
+
+- 前置检查：`HKCU\Software\Chandao\FocusTimer` 注册表项不存在（此前测试未写入过设置），无需清理。
+- `Start-Process _install\main.exe -PassThru` 启动，5 秒后 `HasExited = False`（PID 23876），进程存活无崩溃；随后 `Stop-Process` 杀掉。
+
+## 6. 事件链回归（代码审查）—— PASS
+
+- `focus_timer_widget.cpp`：`mousePressEvent` 未命中播放/「...」按钮（含右上角 ×）时 `event->ignore()`（129–132 行）；`mouseReleaseEvent` 两按钮均未按下时 `ignore()`（149–151 行）；`mouseMoveEvent` 不在任何热区时 `ignore()`（166–169 行）。父窗口事件链不被截获。
+- `frameless_window.cpp`：`mousePressEvent` 判定顺序为 ×（hide 到托盘）→ 播放/「...」按钮（交还控件，不触发拖拽）→ 边缘缩放 → 空白拖拽（144–162 行），dots 热区已排除在拖拽判定外；`applyResize` 短边回正、`resizeEvent` 程序性回正逻辑未动。
+
+## 7. 人工验证项（不影响 PASS/FAIL 判定）
+
+以下交互项自动测试无法覆盖，需人工验证：
+
+1. 点「...」弹出深色下拉菜单 → 点「设置」弹出无边框设置弹窗。
+2. 修改专注/休息时长 → 「确定」生效（续跑或立即进下一阶段）；× 关闭不保存。
+3. 重启程序后时长保持（QSettings 持久化，注册表 `HKCU\Software\Chandao\FocusTimer`）。
+4. 窗口拖拽 / 右上角 × 隐藏托盘 / 边缘缩放的实际手感（本轮已做代码审查，事件链无破坏）。
+
+## 失败摘要与修复建议
+
+| 项 | 期望 | 实际 |
+|---|---|---|
+| 「...」圆点颜色 | 白色（计划第 30 行「自绘三个白色横向圆点」；验收 3c「白点可见」） | 灰色 (122,122,122)，即 #7A7A7A |
+
+- 失败命令/证据：`python _shottest\round4\analyze_round4.py` 退出码 1，`[FAIL] 「...」按钮三个白点可见: 左/中/右点命中=[False, False, False]`（检测阈值 >200 未命中）；精确取像素 `(244,344) = (122,122,122)`。
+- 缺失产物：无（四张截图均生成且尺寸正确）。
+- 根因：`focus_timer_widget.cpp` 第 338 行 `drawDotsButton` 使用 `m_inactiveColor.lighter(200 + 120 * m_dotsHoverT)`，基色 #3D3D3D 提亮后最高仅约 (195,195,195)，永远达不到白色。
+- 修复建议（供实施 Agent 参考）：将圆点基色改为 `QColor(0xFF, 0xFF, 0xFF)`（与暂停/播放图标一致），悬停提亮可改为对白色做 alpha 或微暗化处理；若设计上希望非悬停态略暗，应与计划「白色」要求对齐后再定（建议直接白色，与本次「图标改白」需求风格统一）。
+
+---
+
+# 交付测试报告 — 按钮下移白图标 / 「...」按钮 / 设置弹窗 / 时长持久化 / HH:MM:SS — Round 2 / 5（复测）
+
+- 测试时间：2026-08-19 10:20–10:25（UTC+8）
+- 测试环境：Windows 11 (26200)，PowerShell + Python 3.14.7 / Pillow 12.3.0，显示器缩放 200%（DPR=2）
+- 截图工作目录：`D:\qsw\禅道\_shottest\round5`
+- 对应修复：round 1 唯一失败项——`drawDotsButton` 圆点颜色改纯白 #FFFFFF（一行改动）
+
+## 结论：**PASS**
+
+round 1 失败项已修复：`-t 3` 截图中「...」按钮左/中/右三个圆点最亮点像素均为 **(255, 255, 255) 纯白**，满足 R/G/B ≥ 240 的近白要求。构建/安装退出码均 0，`_install/main.exe` 时间戳 2026-08-19 10:19:42 为本轮新构建；快速回归（`-t 1`/`-t 1.5` 尺寸与退出码、播放按钮下移位置 y/边长=0.839、白色图标近白像素 108 个、无参启动 5 秒存活）全部通过，无任何回退。
+
+## 1. 构建与安装（Release）—— PASS
+
+| 命令 | 期望退出码 | 实际退出码 | 结果 |
+|---|---|---|---|
+| `cmake --build _build --config Release` | 0 | 0（`main.vcxproj -> _build\main\Release\main.exe`） | PASS |
+| `cmake --install _build --config Release` | 0 | 0（`-- Installing: _install/main.exe` + windeployqt） | PASS |
+
+- 产物佐证：`_install/main.exe` LastWriteTime **2026-08-19 10:19:42**（测试执行于 10:20 起），77824 字节，为本轮修复后的最新产物。
+
+## 2. 失败项复测：「...」圆点白度 —— PASS
+
+| 命令 | 退出码 | 产物 | 检测证据 | 结果 |
+|---|---|---|---|---|
+| `main.exe -t 3` | 0 | `round5\shot_3.png`，严格 400×400 | 圆点区域（预期中心 (244,344)，三点间距约 9px）逐点取最亮像素：左=(255,255,255)、中=(255,255,255)、右=(255,255,255)，RGB 均 ≥ 240 | PASS |
+
+## 3. 快速回归 —— PASS
+
+| 项 | 实测证据 | 结果 |
+|---|---|---|
+| `main.exe -t 1` | 退出码 0，`shot_1.png` 严格 400×400 | PASS |
+| `main.exe -t 1.5` | 退出码 0，`shot_1.5.png` 严格 400×400 | PASS |
+| 播放按钮下移不回退 | 蓝色按钮质心 (199.7, 335.6)，y/边长 = 0.839 ≥ 0.83 | PASS |
+| 按钮白色图标不回退 | 按钮中心区近白（≥235）像素 108 个，与 round 1 持平 | PASS |
+| 无参启动 5 秒不崩溃 | 启动前先清理注册表 `HKCU\Software\Chandao\FocusTimer`（该项本次存在，已删除）；进程 PID 37968 五秒后 `HasExited=False`，随后杀掉 | PASS |
+
+## 4. 遗留说明
+
+- 人工验证项（点「...」出菜单、设置弹窗交互、× 不保存、重启持久化生效）与 round 1 一致，仍需人工核验，不影响本结论。
+- round 1 其余通过项（setDurations 分支、截图模式不加载 QSettings、事件链代码审查、`-t 13` 休息阶段、蓝色趋势）本轮未重复全量执行，相关代码路径未被本轮一行改动触及，无回归风险。
