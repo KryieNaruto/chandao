@@ -683,3 +683,63 @@ main.exe -t <秒数> [-s <边长>]
 - 执行记录：`plan/execution-log.md`
 - 测试报告：`plan/test-report.md`（round 2 PASS）
 - 排查：`plan/triage-log.md`（round 2）
+
+## 本轮交付总结（2026-08-19）
+
+### 需求
+
+1. 点击关闭按钮后，动画瞬间布局全部错误：窗口先闪一下再缩小。修复。
+2. 用户复测：点 × 一瞬间仍闪，随后布局错误。继续修。
+3. 「时 / 分 / 秒」和滚筒叠在一起，字有一部分被遮挡。修复。
+
+### 做了什么
+
+**关闭吸入动画（主窗口 ×、设置窗 ×）**
+
+- 新建 header-only `main/src/genie_ghost.h`：快照替身分步 `appearAt`（完整尺寸上屏并刷新合成器）再 `suckInto`（向 × 收缩成 20×20 并淡出，InCubic，约 220ms）。
+- 绘制使用两参数 `drawPixmap(rect(), snapshot)`，避免 200% 缩放（DPR=2）下三参数源矩形只画出左上 1/4。
+- 主窗口 `hideToTray()`：appearAt → `hide()` → suckInto；构造时禁用 DWM 隐藏过渡；`m_hiding` 期间 `resizeEvent` 不做短边回正；不再 `setWindowOpacity`（避免 HWND 被加成 layered 后闪帧）。真窗口几何在动画中不动。
+- 设置窗 `reject()`：不对真 Dialog 做 geometry 动画；appearAt 后仅改透明度，动画结束才 `QDialog::reject()`。
+
+**设置窗单位文字**
+
+- 「时 / 分 / 秒」从滚筒内部绘制改为每个滚筒**右侧外侧**独立标签（14px，`#C8C8C8`），与选中行垂直居中。滚筒内只显示两位数字，不再互相裁切/遮挡。
+
+### 结果是什么
+
+- 验收：自动项**通过**（关闭动画测试 round 1 FAIL 观感 → round 2 自动 PASS；单位文字为后续小改，Release 编译/安装成功）。
+- 产物：`_install/main.exe`（Release，Qt 运行依赖已部署）。
+- Git：已提交并推送 `main`。
+
+| 项 | 值 |
+| --- | --- |
+| 提交 | `5811ab5` |
+| 说明 | Fix close-button suck-in flash and keep time unit labels off the wheels. |
+| 远程 | `https://github.com/KryieNaruto/chandao.git` |
+| 范围 | `e342900..5811ab5` |
+
+### 测试结论
+
+| 检查项 | 结果 |
+| --- | --- |
+| Release 构建 / 安装退出码 0 | 通过 |
+| `-t 1` / `-t 1.5` / `-t 3` 严格 400×400、退出码 0 | 通过（与 round7/round10 像素差 0） |
+| 源码：关闭动画只缩放快照替身；hiding 不做短边回正 | 通过 |
+| 无参启动 5 秒不崩溃 | 通过 |
+| 点 × 无错乱闪帧 | 人工项（round 2 后请用户再确认） |
+| 「时 / 分 / 秒」在滚筒外、数字不被挡 | 人工项（请打开设置确认） |
+
+### 证据
+
+- 计划：`plan/delivery-plan.md`
+- 执行记录：`plan/execution-log.md`
+- 测试报告：`plan/test-report.md`（关闭动画 round 2 PASS）
+- 排查记录：`plan/triage-log.md`（round 2）
+- 本文件：`plan/results/final-result.md`
+
+### 残留风险 / 人工验收项
+
+- 主窗口 / 设置窗点 × 的吸入观感需人工最终确认。
+- 设置窗「时 / 分 / 秒」与数字是否完全无遮挡需打开设置确认。
+- 渐隐色带颜色仍硬编码 `#2B2B2B`。
+- `_shottest/` 未纳入本次提交。
