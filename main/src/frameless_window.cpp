@@ -12,70 +12,7 @@
 #include <QMenu>
 #include <QAction>
 #include <QStyle>
-#include <QPainter>
-#include <QTimer>
-#include <QtMath>
 #include <cmath>
-
-// 全屏半透明休息提醒遮罩：工作计时结束弹出，居中显示「休息一下」与剩余秒数，
-// 休息结束自动关闭。仅覆盖主屏。
-class RestOverlay : public QWidget
-{
-public:
-    explicit RestOverlay(const FocusTimerWidget *timer)
-        : QWidget(nullptr, Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint | Qt::Tool)
-        , m_timer(timer)
-    {
-        setAttribute(Qt::WA_TranslucentBackground);
-        setAttribute(Qt::WA_ShowWithoutActivating);
-        QScreen *screen = QGuiApplication::primaryScreen();
-        if (screen) {
-            setGeometry(screen->geometry());
-        }
-        m_tick = new QTimer(this);
-        connect(m_tick, &QTimer::timeout, this, [this] { update(); });
-    }
-
-    void begin()
-    {
-        m_tick->start(100);
-        show();
-    }
-
-    void end()
-    {
-        m_tick->stop();
-        hide();
-    }
-
-protected:
-    void paintEvent(QPaintEvent *) override
-    {
-        QPainter p(this);
-        p.setRenderHint(QPainter::Antialiasing);
-        p.fillRect(rect(), QColor(0, 0, 0, 180));
-
-        const int secs = qMax(1, static_cast<int>(std::ceil(m_timer->remainingSeconds() - 1e-9)));
-
-        QFont font = p.font();
-        font.setBold(true);
-
-        font.setPixelSize(static_cast<int>(height() * 0.06));
-        p.setFont(font);
-        p.setPen(Qt::white);
-        p.drawText(QRectF(0, height() * 0.38, width(), height() * 0.12),
-                   Qt::AlignCenter, QStringLiteral("休息一下"));
-
-        font.setPixelSize(static_cast<int>(height() * 0.12));
-        p.setFont(font);
-        p.drawText(QRectF(0, height() * 0.50, width(), height() * 0.20),
-                   Qt::AlignCenter, QString::number(secs));
-    }
-
-private:
-    const FocusTimerWidget *m_timer;
-    QTimer *m_tick;
-};
 
 FramelessWindow::FramelessWindow(QWidget *parent)
     : QMainWindow(parent, Qt::FramelessWindowHint)
@@ -89,7 +26,7 @@ FramelessWindow::FramelessWindow(QWidget *parent)
     setCentralWidget(m_timerWidget);
 
     setupTray();
-    setupRestOverlay();
+    setupRestAlert();
 
     // 初始尺寸取主屏幕面积 30% 的正方形，并居中
     QScreen *screen = QGuiApplication::primaryScreen();
@@ -134,17 +71,20 @@ void FramelessWindow::setupTray()
     m_trayIcon->show();
 }
 
-void FramelessWindow::setupRestOverlay()
+void FramelessWindow::setupRestAlert()
 {
-    RestOverlay *overlay = new RestOverlay(m_timerWidget);
-    m_restOverlay = overlay;
+    // 工作→休息切换：不弹窗。窗口处于托盘隐藏状态时恢复显示，
+    // 并通过 QApplication::alert 触发任务栏闪烁提醒（窗口可见时仅闪烁）。
     connect(m_timerWidget, &FocusTimerWidget::phaseChanged, this,
-            [overlay](int state) {
-                if (state == 1) {
-                    overlay->begin();
-                } else {
-                    overlay->end();
+            [this](int state) {
+                if (state != 1) {
+                    return;
                 }
+                if (!isVisible()) {
+                    showNormal();
+                    activateWindow();
+                }
+                QApplication::alert(this);
             });
 }
 

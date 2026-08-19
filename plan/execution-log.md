@@ -128,3 +128,28 @@
 
 - 未执行 `cmake --install`，未做截图回归与人工交互复测（拖动、× 隐藏到托盘、边缘缩放），完整验收由测试 Agent 负责。
 - 无阻塞。
+
+## 2026-08-19 移除全屏休息提醒，改为「恢复 + 闪烁提醒」
+
+### 做了什么
+
+按 `plan/delivery-plan.md` 末尾「变更（2026-08-19）」段落执行：
+
+1. 整体删除 `RestOverlay` 全屏半透明蒙版小类（创建、显示、倒计时刷新、关闭全部代码），并清理因此不再使用的 `#include <QPainter>` / `<QTimer>` / `<QtMath>`（`<cmath>` 保留，构造器仍用 `std::sqrt`）。
+2. `setupRestOverlay()` 改名为 `setupRestAlert()`：仍挂在现有 `FocusTimerWidget::phaseChanged(int)` 信号上，`state == 1`（工作→休息）时——若主窗口不可见（托盘隐藏态）则 `showNormal()` + `activateWindow()` 恢复显示；随后无条件调用 `QApplication::alert(this)`（Windows 上即任务栏闪烁提醒）。休息→工作方向不做任何动作。
+3. 其余行为未动：托盘、中心数字、休息反向进度、拖拽、边缘缩放、`-t` 截图模式（信号不发，不触发提醒）均不回归。
+
+### 改了哪些文件
+
+- `main/src/frameless_window.h`：删除 `m_restOverlay` 成员与 `setupRestOverlay()` 声明，新增 `setupRestAlert()`，更新类注释。
+- `main/src/frameless_window.cpp`：删除 `RestOverlay` 类与相关 include；实现 `setupRestAlert()`。
+- `plan/execution-log.md`：追加本段。
+
+### 编译自检
+
+- `cmake --build _build --config Release` 通过，`main.exe` 生成成功，无编译错误/警告（实现侧自查）。
+
+### 未做事项 / 阻塞
+
+- 未执行 `cmake --install`，未做运行态验证（跨工作→休息边界的恢复显示与任务栏闪烁、托盘/截图回归），完整验收由测试 Agent 负责。
+- 无阻塞。

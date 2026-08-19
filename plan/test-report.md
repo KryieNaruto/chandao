@@ -1,3 +1,108 @@
+# 交付测试报告 — 去全屏蒙版，改为恢复窗口+任务栏闪烁 — Round 3 / 5
+
+- 测试时间：2026-08-19 09:45–09:50（UTC+8）
+- 测试环境：Windows 11 (26200)，PowerShell 5.1 + Python 3.14.7 / Pillow 12.3.0，显示器缩放 200%（DPR=2，物理屏 2560×1600）
+- 截图工作目录：`D:\qsw\禅道\_shottest\round3`；交互脚本：`_shottest\round3\interactive_test3.ps1`、截屏辅助 `_shottest\round3\capture_screen.py`（测试辅助，非产品源码）
+- 对应变更：`plan/delivery-plan.md` 末尾「变更（2026-08-19）」—— `RestOverlay` 整体移除；工作→休息切换时若主窗口托盘隐藏则恢复显示并 `QApplication::alert` 任务栏闪烁
+
+## 结论：**PASS**
+
+构建/安装退出码均 0，`_install/main.exe` 为本轮新构建（09:44:42，与构建输出 SHA256 一致）；截图回归 8/8 通过，数据与前两轮完全一致；**本轮两项重点自动化实测通过**：点击右上角 × 后窗口隐藏且进程托盘驻留（t=3.4s），隐藏状态下跨过工作→休息边界后主窗口**自动恢复可见（t=11.8s）**；7 张全屏截图逐张统计，任何时刻均未出现全屏黑色蒙版（对照 round 1 含蒙版截图：平均亮度 12.2/极暗占比 0.9555，本轮全程 27~35 / 0.83~0.91，无突变）。代码审查确认 RestOverlay 无残留、`phaseChanged` 链路正确、截图模式不含提醒逻辑。任务栏闪烁视觉效果列为人工验证项，不计 FAIL。
+
+## 1. 构建与安装（Release）—— PASS
+
+| 命令 | 期望退出码 | 实际退出码 | 结果 |
+|---|---|---|---|
+| `cmake --build _build --config Release` | 0 | 0（`main.vcxproj -> _build\main\Release\main.exe`） | PASS |
+| `cmake --install _build --config Release` | 0 | 0（`-- Installing: _install/main.exe` + windeployqt） | PASS |
+
+- 产物佐证：`_install/main.exe` LastWriteTime **2026-08-19 09:44:42**（上一轮为 2026-08-18 18:50:59），49152 字节，SHA256 = `CAC6BA89…4C1F7B`，与 `_build\main\Release\main.exe` **哈希完全一致**，确为本轮变更的新构建产物。
+- windeployqt 两条无害警告（缺 translations 目录、缺 dxcompiler.dll），与既往轮次相同，不影响运行。
+
+## 2. 截图回归 —— PASS（无回归）
+
+命令均在 `_shottest\round3` 下以 `Start-Process -Wait -PassThru` 同步执行取真实退出码：
+
+| 命令 | 退出码 | 产物 | 尺寸 | 结果 |
+|---|---|---|---|---|
+| `main.exe -t 3` | 0 | `shot_3.png` | 严格 400×400 | PASS |
+| `main.exe -t 13` | 0 | `shot_13.png` | 严格 400×400 | PASS |
+| `main.exe -t 1 -s 200` | 0 | `shot_1.png` | 严格 200×200 | PASS |
+
+像素分析（`_shottest\round3\analyze_round3.py`，容差 ±12，脚本退出码 0，**8/8 通过**）：
+
+| 检查项 | 实测数据 | 结果 |
+|---|---|---|
+| `shot_3` 中心亮色数字（工作剩 7） | #E8E8E8 像素 **346**，蓝色 0 | PASS |
+| `shot_3` 按钮纯色 #55B2E8 无渐变 | 中心与四近边缘点全部 **(85,178,232)** | PASS |
+| `shot_13` 中心蓝色数字（休息剩 7） | 蓝色像素 **346**，亮色 0 | PASS |
+| 蓝色刻度像素对比 | t=3 = **2935**，t=13 = **6748**，比值 **2.30**（>1.5） | PASS |
+| `shot_13` 顺时针前段已变灰 | 前段灰 **123**、蓝 **0** | PASS |
+
+各项数值与 round 1/2 完全一致，本轮变更未引入任何渲染回归。目视复核 `shot_3.png`/`shot_13.png`：中心数字颜色、圆环配色、右上角 × 均符合预期。
+
+## 3. 交互验证（本轮重点）—— PASS（自动化）
+
+- 方法沿用 round 2：本会话 OS 层合成输入被拒（err=5），改用 **PostMessage 直接向顶层 HWND 投递消息**；窗口可见性用 `IsWindowVisible` 判定；全屏蒙版用 PIL ImageGrab 定时截全屏 + 像素统计判定。
+- 测试流程（`_shottest\round3\interactive_test3.ps1`，脚本退出码 **0**，INTERACTIVE_RESULT=PASS）：
+  1. t=0s 先截基线全屏图 `screen_baseline.png`（无应用），随后无参启动 `_install\main.exe`（PID 27444）。
+  2. t=2.6s 按 PID 枚举到主窗口 HWND=4264104，PostMessage 点击客户区右上角 × 区域（0.925/0.075 比例处）。
+  3. t=3.4s 检查：`IsWindowVisible=**False**` 且 `ProcessAlive=**True**` → **HIDE_TO_TRAY_TEST: PASS**。
+  4. 隐藏状态下持续轮询（每 400ms），t=**11.8s** 检测到 `IsWindowVisible=True`（计时器自进程启动起算，工作 10s 边界落在 t≈10.8s，含 400ms 轮询粒度与截屏耗时，落在 8.5~14s 容差带内）→ **RESTORE_TEST: PASS：托盘隐藏状态下跨过工作→休息边界，主窗口自动恢复显示**。
+  5. 恢复后截屏中心区域放大复核（`zoom_t12_center.png`）：窗口可见，圆环呈休息阶段蓝色（中心区域蓝色采样点 **3650**，隐藏时同区域仅 97），主窗口确实恢复并进入休息阶段渲染。
+  6. 清理：`Stop-Process -Force` 终止；脚本finally后复查曾提示残留，随即补杀，最终确认 **无 main.exe 残留进程**。
+
+### 无全屏蒙版验证 —— PASS
+
+7 张全屏截图（基线/隐藏/5s/8s/恢复时/12s/14s）逐张统计极暗像素占比（R,G,B 均<40）与平均亮度：
+
+| 截图 | 时刻 | DARKFRAC | 平均亮度 |
+|---|---|---|---|
+| screen_baseline.png | t≈0（无应用） | 0.8289 | 31.7 |
+| screen_hidden.png | t≈3.4s | 0.8926 | 31.3 |
+| screen_t5.png | t≈5s | 0.9148 | 27.2 |
+| screen_t8.png | t≈8s | 0.8680 | 33.1 |
+| screen_restored.png | t≈11.8s | 0.8597 | 35.1 |
+| screen_t12.png | t≈12s（休息阶段） | 0.8574 | 35.2 |
+| screen_t14.png | t≈14s（休息阶段） | 0.8494 | 33.6 |
+
+- 对照组（round 1 **含**全屏蒙版的截图）：`interactive_at_12s.png` DARKFRAC=**0.9555**、平均亮度=**12.2**；`rest_overlay_screen.png` DARKFRAC=**0.9359**、平均亮度=**12.7**。
+- 本轮桌面本身偏暗（基线 DARKFRAC 已达 0.83），但**全程各帧指标与基线同量级、无向蒙版特征的突变**；若蒙版出现，平均亮度应跌落至 ~12 量级（对照组实测）。结论：**任何时刻均未出现全屏黑色蒙版**。
+
+## 4. 代码审查（只读）—— PASS
+
+| 审查点 | 结论 | 位置 |
+|---|---|---|
+| RestOverlay 整体移除、无全屏蒙版残留 | ✔ `main/src/` 全目录检索 `RestOverlay/overlay/showFullScreen/WindowStaysOnTop/rgba(0,0,0` 均无匹配；窗口仅有 `#2B2B2B` 背景 | `frameless_window.cpp/.h` |
+| `phaseChanged` 链路正确 | ✔ 工作/休息切换时发射 `phaseChanged(state)`；`FramelessWindow::setupRestAlert` 中 `state==1`（工作→休息）才触发：隐藏则 `showNormal()+activateWindow()`，再 `QApplication::alert(this)` | `focus_timer_widget.cpp:371-383`、`frameless_window.cpp:74-89` |
+| 窗口可见时仅闪烁、不重复弹窗 | ✔ `isVisible()` 分支判断，可见时跳过 `showNormal()` 仅 `alert` | `frameless_window.cpp:83-87` |
+| 截图模式路径不含提醒逻辑 | ✔ `-t` 分支只构造 `FocusTimerWidget`，不构造 `FramelessWindow`；`setTime` 停表且不发射 `phaseChanged` | `main.cpp:26-49`、`focus_timer_widget.cpp:30-46` |
+| 托盘/拖拽/缩放等既有功能 | ✔ 与 round 2 一致，未被本轮变更触碰 | `frameless_window.cpp:41-72,134-221` |
+
+## 人工验证项（不计 FAIL）
+
+| 项 | 原因 | 佐证 |
+|---|---|---|
+| 任务栏闪烁视觉（`QApplication::alert`） | 闪烁是瞬态视觉效果，自动化截屏无法可靠捕获 | 代码路径确认 `QApplication::alert(this)` 必被调用；恢复显示已实测 |
+| 托盘右键菜单「退出」真正关闭程序 | 需托盘图标交互 | 代码路径确认：菜单项 → `QApplication::quit`（round 1/2 已确认，本轮未改动） |
+
+## 汇总表
+
+| 验收项 | 期望 | 实际 | 结果 |
+|---|---|---|---|
+| 构建 / 安装 Release | 退出码 0 | 0 / 0 | PASS |
+| `_install/main.exe` 更新 | 哈希/时间戳佐证 | 09:44:42，与构建输出 SHA256 一致 | PASS |
+| `-t 3` | 0、400×400、中心亮色「7」、按钮纯色 #55B2E8 | 全部符合（346 / 五点纯色一致） | PASS |
+| `-t 13` | 中心蓝色「7」、蓝刻度明显多于 `-t 3` | 蓝色 346；6748 vs 2935（2.30 倍） | PASS |
+| `-t 1 -s 200` | 严格 200×200 | 200×200，退出码 0 | PASS |
+| 右上角 × 隐藏到托盘 | 窗口不可见且进程驻留 | IsWindowVisible=False，进程存活 | PASS |
+| 托盘隐藏时计时到自动恢复显示（本轮重点） | 跨工作→休息边界后 IsWindowVisible→True | t=11.8s 自动恢复可见（边界 ~10.8s） | PASS |
+| 全程无全屏黑色蒙版（本轮重点） | 任何时刻不出现大面积深色遮罩 | 7 帧统计与基线同量级，对照组差异显著；未见蒙版 | PASS |
+| 代码审查 | RestOverlay 无残留、phaseChanged 链路正确、截图模式无提醒 | 逐项确认 | PASS |
+| 进程清理 | 测试结束杀掉 main.exe | 已终止，无残留 | PASS |
+
+---
+
 # 交付测试报告 — 事件传播修复（拖动/托盘）— Round 2 / 5
 
 - 测试时间：2026-08-18 18:52–18:58（UTC+8）

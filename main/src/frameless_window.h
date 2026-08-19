@@ -9,7 +9,7 @@ class QSystemTrayIcon;
 // 空白区域按住拖拽移动，边缘 6px 热区支持 8 方向缩放（纯 Qt 实现）。
 // 全程保持正方形（以短边为准回正），最小 200×200。
 // 点击关闭按钮隐藏到系统托盘，托盘右键菜单「退出」才真正关闭；
-// 工作计时结束弹出全屏半透明休息提醒，休息结束自动关闭。
+// 工作→休息切换时若窗口处于托盘隐藏状态则恢复显示，并触发任务栏闪烁提醒。
 class FramelessWindow : public QMainWindow
 {
     Q_OBJECT
@@ -29,11 +29,10 @@ private:
     void updateCursor(const QPoint &pos);
     void applyResize(const QPoint &globalPos);
     void setupTray();
-    void setupRestOverlay();
+    void setupRestAlert();
 
     FocusTimerWidget *m_timerWidget;
     QSystemTrayIcon *m_trayIcon = nullptr;
-    QWidget *m_restOverlay = nullptr;
 
     static constexpr int kEdgeMargin = 6; // 边缘缩放热区宽度（像素）
 
