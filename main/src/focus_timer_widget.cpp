@@ -2,17 +2,163 @@
 #include "settings_dialog.h"
 
 #include <QPainter>
+#include <QPainterPath>
 #include <QMouseEvent>
-#include <QMenu>
-#include <QAction>
+#include <QPropertyAnimation>
 #include <QSettings>
+#include <QStringList>
+#include <QVector>
 #include <QtMath>
 #include <cmath>
+#include <functional>
 
 // 各动画在 60fps 下的单帧步长：图标切换约 150ms，悬停/按压取相近量级的快响应
 static constexpr double kIconStep  = 0.016 / 0.150;
 static constexpr double kHoverStep = 0.016 / 0.120;
 static constexpr double kPressStep = 0.016 / 0.060;
+
+// 播放按钮与「...」按钮统一半径比（直径 ≈ 窗口边长 8%）
+static constexpr double kButtonRadiusRatio = 0.04;
+// 两按钮作为整体水平居中：各自中心距窗口中线的偏移比（间距与旧版一致）
+static constexpr double kButtonHalfGap = 0.055;
+
+namespace {
+
+// 「...」圆角浮层菜单：QMenu 样式表无法做圆角与悬停过渡动画，故自绘。
+// 高亮满宽无内边距（避免蓝色外一圈灰），悬停颜色按 60fps 插值渐变。
+class DotsMenuPopup : public QWidget
+{
+public:
+    explicit DotsMenuPopup(const QStringList &items, QWidget *parent = nullptr)
+        : QWidget(parent, Qt::Popup | Qt::FramelessWindowHint | Qt::NoDropShadowWindowHint)
+        , m_items(items)
+        , m_hoverT(items.size(), 0.0)
+    {
+        // WA_TranslucentBackground 让圆角之外真正透明，否则四角露黑/灰
+        setAttribute(Qt::WA_TranslucentBackground);
+        setAttribute(Qt::WA_DeleteOnClose);
+        setWindowOpacity(0.0); // 弹出动画从全透明开始，避免首帧闪现
+        setMouseTracking(true);
+        setFixedSize(kWidth, kVPad * 2 + kItemH * m_items.size());
+        m_timer = new QTimer(this);
+        connect(m_timer, &QTimer::timeout, this, [this] { tick(); });
+        m_timer->start(16); // 与主控件同为约 60fps 插值
+    }
+
+    // 点击某项后回调（在 close() 之后调用，回调内不得再访问本对象）
+    std::function<void(int)> onTriggered;
+
+protected:
+    void showEvent(QShowEvent *event) override
+    {
+        QWidget::showEvent(event);
+        // 丝滑弹出：淡入 + 从上方 8px 处滑入
+        auto *fade = new QPropertyAnimation(this, "windowOpacity", this);
+        fade->setDuration(160);
+        fade->setStartValue(0.0);
+        fade->setEndValue(1.0);
+        fade->setEasingCurve(QEasingCurve::OutCubic);
+        fade->start(QAbstractAnimation::DeleteWhenStopped);
+
+        auto *slide = new QPropertyAnimation(this, "pos", this);
+        slide->setDuration(160);
+        slide->setStartValue(pos() - QPoint(0, 8));
+        slide->setEndValue(pos());
+        slide->setEasingCurve(QEasingCurve::OutCubic);
+        slide->start(QAbstractAnimation::DeleteWhenStopped);
+    }
+
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing);
+
+        // 圆角背景
+        QPainterPath clip;
+        clip.addRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), 8.0, 8.0);
+        p.setClipPath(clip);
+        p.fillPath(clip, QColor(0x2B, 0x2B, 0x2B));
+
+        // 菜单项：高亮满宽（由 clip 裁出圆角），蓝色透明度随悬停渐变
+        QFont font = p.font();
+        font.setPixelSize(13);
+        p.setFont(font);
+        for (int i = 0; i < m_items.size(); ++i) {
+            const QRectF itemRc(0.0, kVPad + i * kItemH, kWidth, kItemH);
+            const double t = m_hoverT[i];
+            if (t > 0.0) {
+                QColor hl(0x55, 0xB2, 0xE8);
+                hl.setAlphaF(t);
+                p.setPen(Qt::NoPen);
+                p.setBrush(hl);
+                p.drawRect(itemRc);
+            }
+            // 文字颜色随悬停在 #E8E8E8 与纯白间过渡
+            const int v = static_cast<int>(0xE8 + (0xFF - 0xE8) * t);
+            p.setPen(QColor(v, v, v));
+            p.drawText(itemRc.adjusted(14, 0, 0, 0),
+                       Qt::AlignVCenter | Qt::AlignLeft, m_items[i]);
+        }
+
+        // 1px 描边（在 clip 之内绘制，避免外沿灰边）
+        p.setClipping(false);
+        p.setPen(QPen(QColor(0x3D, 0x3D, 0x3D), 1));
+        p.setBrush(Qt::NoBrush);
+        p.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), 8.0, 8.0);
+    }
+
+    void mouseMoveEvent(QMouseEvent *event) override { setHovered(indexAt(event->pos())); }
+    void leaveEvent(QEvent *) override { setHovered(-1); }
+
+    void mouseReleaseEvent(QMouseEvent *event) override
+    {
+        const int idx = indexAt(event->pos());
+        auto cb = onTriggered;
+        close(); // WA_DeleteOnClose 为延迟删除，本帧内对象仍有效
+        if (idx >= 0 && cb) {
+            cb(idx); // 回调可能开启嵌套事件循环，此后不得再访问本对象成员
+        }
+    }
+
+private:
+    int indexAt(const QPoint &pos) const
+    {
+        const int rel = pos.y() - kVPad;
+        if (rel < 0) {
+            return -1;
+        }
+        const int idx = rel / kItemH;
+        return (idx >= 0 && idx < m_items.size()) ? idx : -1;
+    }
+
+    void setHovered(int idx)
+    {
+        if (idx != m_hovered) {
+            m_hovered = idx;
+        }
+    }
+
+    void tick()
+    {
+        for (int i = 0; i < m_hoverT.size(); ++i) {
+            const double target = (i == m_hovered) ? 1.0 : 0.0;
+            double &v = m_hoverT[i];
+            v = (v < target) ? qMin(v + kHoverStep, target) : qMax(v - kHoverStep, target);
+        }
+        update();
+    }
+
+    static constexpr int kWidth = 120;
+    static constexpr int kItemH = 30;
+    static constexpr int kVPad = 6;
+
+    QStringList m_items;
+    QVector<double> m_hoverT;
+    int m_hovered = -1;
+    QTimer *m_timer;
+};
+
+} // namespace
 
 FocusTimerWidget::FocusTimerWidget(QWidget *parent)
     : QWidget(parent)
@@ -251,9 +397,9 @@ void FocusTimerWidget::drawButton(QPainter &p)
     const double w = width();
     const double h = height();
     const double base = qMin(w, h);
-    const QPointF center(w * 0.5, h * 0.86);
-    // 按钮直径 ≈ 窗口边长 10%
-    const double radius = base * 0.05;
+    const QPointF center(w * 0.5 - base * kButtonHalfGap, h * 0.86);
+    // 与「...」按钮同尺寸（直径 ≈ 窗口边长 8%），两按钮整体水平居中
+    const double radius = base * kButtonRadiusRatio;
     // 按压瞬时缩小到约 0.92 倍并随 m_pressT 回弹
     const double scale = 1.0 - 0.08 * m_pressT;
     // 悬停提亮系数
@@ -326,16 +472,13 @@ void FocusTimerWidget::drawDotsButton(QPainter &p)
     const QPointF c = rc.center();
     const double r = rc.width() * 0.5;
 
-    // 悬停提亮：浮现浅灰圆底 + 圆点变亮（复用 m_dotsHoverT 插值）
-    if (m_dotsHoverT > 0.0) {
-        QColor bg = QColor(0xFF, 0xFF, 0xFF);
-        bg.setAlphaF(0.10 * m_dotsHoverT);
-        p.setPen(Qt::NoPen);
-        p.setBrush(bg);
-        p.drawEllipse(c, r, r);
-    }
+    // 常驻淡灰圆底，悬停时提亮（m_dotsHoverT 插值，丝滑过渡）
+    const int g = static_cast<int>(0x45 + (0x58 - 0x45) * m_dotsHoverT);
+    p.setPen(Qt::NoPen);
+    p.setBrush(QColor(g, g, g));
+    p.drawEllipse(c, r, r);
 
-    // 圆点纯白，与播放按钮白色图标风格统一；悬停反馈由上方浅灰圆底承担
+    // 圆点纯白，与播放按钮白色图标风格统一
     const QColor fg(0xFF, 0xFF, 0xFF);
     const double dotR = qMax(1.0, base * 0.008);
     const double gap = r * 0.55;
@@ -348,20 +491,19 @@ void FocusTimerWidget::drawDotsButton(QPainter &p)
 
 void FocusTimerWidget::showDotsMenu()
 {
-    QMenu menu(this);
-    menu.setStyleSheet(QStringLiteral(
-        "QMenu { background: #2B2B2B; color: #E8E8E8; border: 1px solid #3D3D3D; padding: 4px; }"
-        "QMenu::item { padding: 6px 24px; }"
-        "QMenu::item:selected { background: #55B2E8; color: #FFFFFF; }"));
-    QAction *settingsAction = menu.addAction(QStringLiteral("设置"));
+    auto *popup = new DotsMenuPopup({ QStringLiteral("设置") }, this);
 
-    // 弹出在「...」按钮正下方
+    // 弹出在「...」按钮正下方，水平居中对齐按钮
     const QRect rc = dotsButtonRect();
-    const QPoint anchor = mapToGlobal(QPoint(rc.center().x(), rc.bottom() + 4));
-    QAction *chosen = menu.exec(anchor);
-    if (chosen == settingsAction) {
-        openSettingsDialog();
-    }
+    const QPoint anchor = mapToGlobal(QPoint(rc.center().x(), rc.bottom() + 6));
+    popup->move(anchor.x() - popup->width() / 2, anchor.y());
+
+    popup->onTriggered = [this](int index) {
+        if (index == 0) {
+            openSettingsDialog();
+        }
+    };
+    popup->show();
 }
 
 void FocusTimerWidget::openSettingsDialog()
@@ -404,8 +546,8 @@ QRect FocusTimerWidget::buttonRect() const
     const double w = width();
     const double h = height();
     const double base = qMin(w, h);
-    const double radius = base * 0.05;
-    const QPointF center(w * 0.5, h * 0.86);
+    const double radius = base * kButtonRadiusRatio;
+    const QPointF center(w * 0.5 - base * kButtonHalfGap, h * 0.86);
     return QRect(static_cast<int>(center.x() - radius),
                  static_cast<int>(center.y() - radius),
                  static_cast<int>(radius * 2),
@@ -417,9 +559,9 @@ QRect FocusTimerWidget::dotsButtonRect() const
     const double w = width();
     const double h = height();
     const double base = qMin(w, h);
-    const double radius = base * 0.04;
-    // 与播放按钮同一水平线，位于其右侧
-    const QPointF center(w * 0.5 + base * 0.11, h * 0.86);
+    const double radius = base * kButtonRadiusRatio;
+    // 与播放按钮同一水平线、整体水平居中：位于中线右侧对称位
+    const QPointF center(w * 0.5 + base * kButtonHalfGap, h * 0.86);
     return QRect(static_cast<int>(center.x() - radius),
                  static_cast<int>(center.y() - radius),
                  static_cast<int>(radius * 2),

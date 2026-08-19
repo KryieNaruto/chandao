@@ -1,61 +1,218 @@
 #include "settings_dialog.h"
 
-#include <QTimeEdit>
 #include <QLabel>
 #include <QPushButton>
 #include <QHBoxLayout>
 #include <QVBoxLayout>
 #include <QPainter>
 #include <QMouseEvent>
-#include <QTime>
+#include <QWheelEvent>
+#include <QPropertyAnimation>
+#include <QShowEvent>
+#include <QTimer>
+#include <cmath>
+
+// 竖向滚筒选择器：按住上下拖动滚动，松手指数趋近吸附到最近项，支持鼠标滚轮。
+// 数值以「项」为单位保存为浮点偏移，居中项为当前值。
+class WheelPicker : public QWidget
+{
+public:
+    WheelPicker(int minValue, int maxValue, QWidget *parent = nullptr)
+        : QWidget(parent)
+        , m_min(minValue)
+        , m_max(maxValue)
+    {
+        setFixedSize(52, kItemH * kVisible);
+        setCursor(Qt::OpenHandCursor);
+        m_timer = new QTimer(this);
+        connect(m_timer, &QTimer::timeout, this, [this] { tick(); });
+        m_timer->start(16); // 约 60fps 吸附动画
+    }
+
+    int value() const
+    {
+        return qBound(m_min, static_cast<int>(std::lround(m_offset)) + m_min, m_max);
+    }
+
+    void setValue(int v)
+    {
+        m_offset = qBound(0, v - m_min, m_max - m_min);
+        m_target = m_offset;
+        update();
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing);
+
+        const double centerY = height() * 0.5;
+        // 选中行底色带，提供视觉锚点
+        p.setPen(Qt::NoPen);
+        p.setBrush(QColor(0x3A, 0x3A, 0x3A));
+        p.drawRoundedRect(QRectF(2.0, centerY - kItemH * 0.5, width() - 4.0, kItemH), 6.0, 6.0);
+
+        const int count = m_max - m_min + 1;
+        for (int i = 0; i < count; ++i) {
+            const double y = centerY + (i - m_offset) * kItemH;
+            if (y < -kItemH || y > height() + kItemH) {
+                continue;
+            }
+            // 距中心越远越暗、越小；选中项加粗纯白
+            const double dist = std::abs(i - m_offset);
+            const double t = qBound(0.0, 1.0 - dist / (kVisible * 0.5), 1.0);
+            const bool selected = (std::lround(m_offset) == i);
+            const int g = static_cast<int>(0x66 + (0xFF - 0x66) * t);
+            QFont font = p.font();
+            font.setPixelSize(selected ? 17 : 14);
+            font.setBold(selected);
+            p.setFont(font);
+            p.setPen(QColor(g, g, g));
+            p.drawText(QRectF(0.0, y - kItemH * 0.5, width(), kItemH),
+                       Qt::AlignCenter,
+                       QString::number(m_min + i).rightJustified(2, QLatin1Char('0')));
+        }
+    }
+
+    void mousePressEvent(QMouseEvent *event) override
+    {
+        if (event->button() == Qt::LeftButton) {
+            m_dragging = true;
+            m_dragStartY = event->pos().y();
+            m_dragStartOffset = m_offset;
+            setCursor(Qt::ClosedHandCursor);
+        }
+    }
+
+    void mouseMoveEvent(QMouseEvent *event) override
+    {
+        if (m_dragging) {
+            // 向上拖 → 数值增大；拖动中不吸附，直接跟手
+            m_offset = qBound(0.0,
+                              m_dragStartOffset + (m_dragStartY - event->pos().y()) / double(kItemH),
+                              double(m_max - m_min));
+            m_target = m_offset;
+            update();
+        }
+    }
+
+    void mouseReleaseEvent(QMouseEvent *event) override
+    {
+        if (event->button() == Qt::LeftButton && m_dragging) {
+            m_dragging = false;
+            setCursor(Qt::OpenHandCursor);
+            m_target = qBound(0.0, std::round(m_offset), double(m_max - m_min)); // 松手吸附
+        }
+    }
+
+    void wheelEvent(QWheelEvent *event) override
+    {
+        const int steps = event->angleDelta().y() / 120;
+        m_target = qBound(0.0, std::round(m_target) - steps, double(m_max - m_min));
+    }
+
+private:
+    void tick()
+    {
+        if (m_dragging) {
+            return;
+        }
+        const double diff = m_target - m_offset;
+        if (std::abs(diff) < 0.01) {
+            if (m_offset != m_target) {
+                m_offset = m_target;
+                update();
+            }
+            return;
+        }
+        m_offset += diff * 0.25; // 指数趋近，吸附丝滑
+        update();
+    }
+
+    static constexpr int kItemH = 30;
+    static constexpr int kVisible = 5;
+
+    int m_min;
+    int m_max;
+    double m_offset = 0.0; // 滚动位置（单位：项）
+    double m_target = 0.0;
+    bool m_dragging = false;
+    int m_dragStartY = 0;
+    double m_dragStartOffset = 0.0;
+    QTimer *m_timer;
+};
 
 SettingsDialog::SettingsDialog(double workSec, double restSec, QWidget *parent)
     : QDialog(parent, Qt::Dialog | Qt::FramelessWindowHint)
 {
-    setFixedSize(320, 220);
+    setAttribute(Qt::WA_TranslucentBackground); // 圆角之外真正透明
+    setFixedSize(400, 400);
+    setWindowOpacity(0.0); // 弹出动画从全透明开始，避免首帧闪现
     setStyleSheet(QStringLiteral(
-        "QDialog { background: #2B2B2B; }"
         "QLabel { color: #E8E8E8; background: transparent; }"
-        "QTimeEdit { background: #3D3D3D; color: #E8E8E8; border: none;"
-        "            padding: 4px 8px; selection-background-color: #55B2E8; }"
-        "QTimeEdit::up-button, QTimeEdit::down-button { width: 16px; background: #3D3D3D; }"
+        "QLabel[class=\"unit\"] { color: #7A7A7A; }"
         "QPushButton { background: #55B2E8; color: #FFFFFF; border: none;"
-        "              padding: 8px 32px; }"
+        "              border-radius: 6px; padding: 10px 40px; }"
         "QPushButton:hover { background: #6CC0F0; }"
         "QPushButton:pressed { background: #4A9FD4; }"));
 
     QLabel *titleLabel = new QLabel(QStringLiteral("设置"), this);
     titleLabel->setAlignment(Qt::AlignCenter);
 
-    const auto secsToTime = [](double secs) {
-        const int s = qBound(0, static_cast<int>(secs), 86399); // QTimeEdit 上限 23:59:59
-        return QTime(0, 0, 0).addSecs(s);
+    const auto secsToHms = [](double secs, int &h, int &m, int &s) {
+        const int total = qBound(0, static_cast<int>(secs), 359999); // 滚筒上限 99:59:59
+        h = total / 3600;
+        m = (total % 3600) / 60;
+        s = total % 60;
+    };
+    int h = 0, m = 0, s = 0;
+
+    const auto makeTimeRow = [this](const QString &name, WheelPicker *&wh, WheelPicker *&wm, WheelPicker *&ws) {
+        wh = new WheelPicker(0, 99, this);
+        wm = new WheelPicker(0, 59, this);
+        ws = new WheelPicker(0, 59, this);
+        QHBoxLayout *row = new QHBoxLayout;
+        row->setSpacing(6);
+        row->addWidget(new QLabel(name, this));
+        row->addStretch();
+        const auto addWheel = [this, row](WheelPicker *w, const QString &unit) {
+            QVBoxLayout *col = new QVBoxLayout;
+            col->setSpacing(2);
+            QLabel *unitLabel = new QLabel(unit, this);
+            unitLabel->setProperty("class", QStringLiteral("unit"));
+            unitLabel->setAlignment(Qt::AlignCenter);
+            col->addWidget(w, 0, Qt::AlignHCenter);
+            col->addWidget(unitLabel);
+            row->addLayout(col);
+        };
+        addWheel(wh, QStringLiteral("时"));
+        addWheel(wm, QStringLiteral("分"));
+        addWheel(ws, QStringLiteral("秒"));
+        return row;
     };
 
-    m_workEdit = new QTimeEdit(secsToTime(workSec), this);
-    m_workEdit->setDisplayFormat(QStringLiteral("HH:mm:ss"));
-    m_restEdit = new QTimeEdit(secsToTime(restSec), this);
-    m_restEdit->setDisplayFormat(QStringLiteral("HH:mm:ss"));
+    QHBoxLayout *workRow = makeTimeRow(QStringLiteral("专注时间"), m_workH, m_workM, m_workS);
+    secsToHms(workSec, h, m, s);
+    m_workH->setValue(h);
+    m_workM->setValue(m);
+    m_workS->setValue(s);
 
-    QHBoxLayout *workRow = new QHBoxLayout;
-    workRow->addWidget(new QLabel(QStringLiteral("专注时间"), this));
-    workRow->addStretch();
-    workRow->addWidget(m_workEdit);
-
-    QHBoxLayout *restRow = new QHBoxLayout;
-    restRow->addWidget(new QLabel(QStringLiteral("休息时间"), this));
-    restRow->addStretch();
-    restRow->addWidget(m_restEdit);
+    QHBoxLayout *restRow = makeTimeRow(QStringLiteral("休息时间"), m_restH, m_restM, m_restS);
+    secsToHms(restSec, h, m, s);
+    m_restH->setValue(h);
+    m_restM->setValue(m);
+    m_restS->setValue(s);
 
     QPushButton *okButton = new QPushButton(QStringLiteral("确定"), this);
     connect(okButton, &QPushButton::clicked, this, &QDialog::accept);
 
     QVBoxLayout *layout = new QVBoxLayout(this);
-    layout->setContentsMargins(24, 12, 24, 20);
+    layout->setContentsMargins(24, 14, 24, 24);
     layout->addWidget(titleLabel);
-    layout->addSpacing(12);
+    layout->addSpacing(10);
     layout->addLayout(workRow);
-    layout->addSpacing(8);
+    layout->addSpacing(14);
     layout->addLayout(restRow);
     layout->addStretch(); // 「确定」落在中间偏下
     layout->addWidget(okButton, 0, Qt::AlignHCenter);
@@ -69,32 +226,36 @@ SettingsDialog::SettingsDialog(double workSec, double restSec, QWidget *parent)
 
 double SettingsDialog::workSeconds() const
 {
-    return QTime(0, 0, 0).secsTo(m_workEdit->time());
+    return m_workH->value() * 3600 + m_workM->value() * 60 + m_workS->value();
 }
 
 double SettingsDialog::restSeconds() const
 {
-    return QTime(0, 0, 0).secsTo(m_restEdit->time());
+    return m_restH->value() * 3600 + m_restM->value() * 60 + m_restS->value();
 }
 
 QRect SettingsDialog::closeButtonRect() const
 {
     const int d = 24;
-    const int m = 8;
+    const int m = 10;
     return QRect(width() - m - d, m, d, d);
 }
 
 QRect SettingsDialog::titleRect() const
 {
     // 顶部标题区（不含右上角 × 热区）
-    return QRect(0, 0, closeButtonRect().left(), 40);
+    return QRect(0, 0, closeButtonRect().left(), 44);
 }
 
 void SettingsDialog::paintEvent(QPaintEvent *)
 {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
-    p.fillRect(rect(), QColor(0x2B, 0x2B, 0x2B));
+
+    // 圆角背景（WA_TranslucentBackground 保证四角透明）
+    p.setPen(QPen(QColor(0x3D, 0x3D, 0x3D), 1));
+    p.setBrush(QColor(0x2B, 0x2B, 0x2B));
+    p.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), 12.0, 12.0);
 
     // 右上角自绘 ×
     const QPointF c = closeButtonRect().center();
@@ -102,6 +263,25 @@ void SettingsDialog::paintEvent(QPaintEvent *)
     p.setPen(QPen(QColor(0xE8, 0xE8, 0xE8), 1.6, Qt::SolidLine, Qt::RoundCap));
     p.drawLine(QPointF(c.x() - d, c.y() - d), QPointF(c.x() + d, c.y() + d));
     p.drawLine(QPointF(c.x() - d, c.y() + d), QPointF(c.x() + d, c.y() - d));
+}
+
+void SettingsDialog::showEvent(QShowEvent *event)
+{
+    QDialog::showEvent(event);
+    // 丝滑弹出：淡入 + 从上方 14px 处滑入
+    auto *fade = new QPropertyAnimation(this, "windowOpacity", this);
+    fade->setDuration(200);
+    fade->setStartValue(0.0);
+    fade->setEndValue(1.0);
+    fade->setEasingCurve(QEasingCurve::OutCubic);
+    fade->start(QAbstractAnimation::DeleteWhenStopped);
+
+    auto *slide = new QPropertyAnimation(this, "pos", this);
+    slide->setDuration(200);
+    slide->setStartValue(pos() - QPoint(0, 14));
+    slide->setEndValue(pos());
+    slide->setEasingCurve(QEasingCurve::OutCubic);
+    slide->start(QAbstractAnimation::DeleteWhenStopped);
 }
 
 void SettingsDialog::mousePressEvent(QMouseEvent *event)
