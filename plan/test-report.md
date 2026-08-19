@@ -1,3 +1,69 @@
+# 交付测试报告 — 滚筒渐隐与设置窗文字放大 — Round 1 / 5
+
+- 测试时间：2026-08-19 10:58–11:05（UTC+8）
+- 测试环境：Windows 11 (26200)，PowerShell + Python / Pillow，显示器缩放 200%（DPR=2）
+- 截图工作目录：`D:\qsw\禅道\_shottest\round7`（本轮新建）
+- 对应变更：`plan/execution-log.md` 2026-08-19「滚筒渐隐与设置窗文字放大」——仅改 `main/src/settings_dialog.cpp`（WheelPicker 顶/底渐隐色带、项高/宽度/字号放大、设置窗文字放大与布局填充、窗口 420×460）
+
+## 结论：**PASS**
+
+构建/安装退出码均 0，`_install/main.exe` 时间戳更新为本轮（10:57）；截图回归 `-t 1 / 1.5 / 3` 全部退出码 0、严格 400×400，与指定基线 `_shottest/round6/shot_3.png` 像素 diff = **0**（主窗口零改动成立）；代码审查确认渐隐色带在数字项之后绘制、颜色 #2B2B2B 不透明→透明、各 1.5 项高（51px），全部尺寸/字号常量（34/56/19/16、18 加粗/15/12、420×460）落实，底部 stretch 保留；无参启动 5 秒不崩溃。设置窗渐隐观感与文字布局观感为人工验证项，列入第 5 节，不影响判定。
+
+## 1. 构建与安装（Release）—— PASS
+
+| 命令 | 期望退出码 | 实际退出码 | 结果 |
+|---|---|---|---|
+| `cmake --build _build --config Release` | 0 | 0（`main.vcxproj -> _build\main\Release\main.exe`） | PASS |
+| `cmake --install _build --config Release` | 0 | 0（`-- Installing: _install/main.exe` + windeployqt） | PASS |
+
+- 产物佐证：`_install/main.exe` LastWriteTime **2026-08-19 10:57**（上一轮为 10:47），93696 字节，为本轮新构建安装产物。
+- windeployqt 两条无害警告（缺 translations、缺 dxcompiler.dll），与既往轮次相同，不影响运行。
+
+## 2. 截图回归 —— PASS
+
+命令在 `_shottest\round7` 下以 `Start-Process -Wait -PassThru` 同步执行取真实退出码：
+
+| 命令 | 退出码 | 产物 | 尺寸 | 结果 |
+|---|---|---|---|---|
+| `main.exe -t 1` | 0 | `shot_1.png` | 严格 400×400 | PASS |
+| `main.exe -t 1.5` | 0 | `shot_1.5.png` | 严格 400×400 | PASS |
+| `main.exe -t 3` | 0 | `shot_3.png` | 严格 400×400 | PASS |
+
+像素对比（Python + PIL，RGBA 逐像素）：
+
+| 对比 | 差异像素数 | 结果 |
+|---|---|---|
+| round7/shot_3.png vs round6/shot_3.png（指定基线） | **0** | PASS，主画面完全一致 |
+| round7/shot_1.png vs round6/shot_1.png | 2157 | 见下方说明，非本轮回归 |
+| round7/shot_1.5.png vs round6/shot_1.5.png | 2157 | 同上 |
+
+- 说明：round6 目录内 `shot_1.png`/`shot_1.5.png` 生成于 10:35（旧构建），`shot_3.png` 生成于 10:47（当前构建）。差异区域 bbox (162,328)-(255,359) 即底部按钮行，源于已提交的旧 commit `9c535e7`「Center button pair」（播放按钮左移、双按钮居中布局），与本轮 `settings_dialog.cpp` 改动无关。佐证：round6/shot_3（10:47 新布局）与 round7/shot_3 逐像素 0 差异；git 状态显示本轮唯一源码改动为 `M main/src/settings_dialog.cpp`，主窗口相关文件零改动。
+
+## 3. 代码审查 `main/src/settings_dialog.cpp` —— PASS
+
+| 审查项 | 实际 | 结果 |
+|---|---|---|
+| 渐变色带在数字项之后绘制（覆盖数字） | `paintEvent` 末尾（选中行底色带与全部数字绘制之后）叠加顶/底色带 | PASS |
+| 色带颜色 #2B2B2B 不透明→透明 | `QLinearGradient`，顶部 `bg(不透明)→alpha 0`、底部反向；`bg = QColor(0x2B,0x2B,0x2B)` 与弹窗背景一致 | PASS |
+| 色带高度顶/底各约 1.5 项高 | `fadeH = kItemH * 1.5 = 51px` | PASS |
+| 项高/宽度/字号常量 | `kItemH = 34`、`setFixedSize(56, kItemH*kVisible)`、选中 19px / 普通 16px（计划值 34/56/19/16 全部落实） | PASS |
+| 标题 18px 加粗 | `titleFont.setPixelSize(18); setBold(true)` | PASS |
+| 行标签 15px | 「专注时间/休息时间」`setPixelSize(15)` | PASS |
+| 单位标签 12px | 「时/分/秒」`setPixelSize(12)` | PASS |
+| 窗口 420×460 | `setFixedSize(420, 460)` | PASS |
+| 确定按钮仍中间偏下 | `layout->addStretch()` 保留在 `okButton` 之前 | PASS |
+
+## 4. 无参启动稳定性 —— PASS
+
+- `Start-Process _install\main.exe`，5 秒后 `HasExited = False`（存活、未崩溃），随后 `Stop-Process` 杀掉进程。
+
+## 5. 人工验证项（不影响 PASS/FAIL）
+
+- [ ] 打开设置窗，滚筒顶部/底部数字渐隐自然，与「时/分/秒」单位标签无视觉重叠。
+- [ ] 设置窗文字大小（标题/行标签/单位/滚筒数字）与布局观感，中部无明显空旷区域，「确定」落中间偏下。
+
+---
+
 # 交付测试报告 — 去全屏蒙版，改为恢复窗口+任务栏闪烁 — Round 3 / 5
 
 - 测试时间：2026-08-19 09:45–09:50（UTC+8）

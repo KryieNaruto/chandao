@@ -5,6 +5,7 @@
 #include <QHBoxLayout>
 #include <QVBoxLayout>
 #include <QPainter>
+#include <QLinearGradient>
 #include <QMouseEvent>
 #include <QWheelEvent>
 #include <QPropertyAnimation>
@@ -22,7 +23,7 @@ public:
         , m_min(minValue)
         , m_max(maxValue)
     {
-        setFixedSize(52, kItemH * kVisible);
+        setFixedSize(56, kItemH * kVisible);
         setCursor(Qt::OpenHandCursor);
         m_timer = new QTimer(this);
         connect(m_timer, &QTimer::timeout, this, [this] { tick(); });
@@ -65,7 +66,7 @@ protected:
             const bool selected = (std::lround(m_offset) == i);
             const int g = static_cast<int>(0x66 + (0xFF - 0x66) * t);
             QFont font = p.font();
-            font.setPixelSize(selected ? 17 : 14);
+            font.setPixelSize(selected ? 19 : 16);
             font.setBold(selected);
             p.setFont(font);
             p.setPen(QColor(g, g, g));
@@ -73,6 +74,19 @@ protected:
                        Qt::AlignCenter,
                        QString::number(m_min + i).rightJustified(2, QLatin1Char('0')));
         }
+
+        // 顶/底渐隐色带：背景色不透明 → 全透明，数字接近滚筒边缘时融入背景，
+        // 避免与下方「时/分/秒」单位标签视觉重叠
+        const double fadeH = kItemH * 1.5;
+        const QColor bg(0x2B, 0x2B, 0x2B);
+        QLinearGradient topFade(0.0, 0.0, 0.0, fadeH);
+        topFade.setColorAt(0.0, bg);
+        topFade.setColorAt(1.0, QColor(bg.red(), bg.green(), bg.blue(), 0));
+        p.fillRect(QRectF(0.0, 0.0, width(), fadeH), topFade);
+        QLinearGradient bottomFade(0.0, height() - fadeH, 0.0, height());
+        bottomFade.setColorAt(0.0, QColor(bg.red(), bg.green(), bg.blue(), 0));
+        bottomFade.setColorAt(1.0, bg);
+        p.fillRect(QRectF(0.0, height() - fadeH, width(), fadeH), bottomFade);
     }
 
     void mousePressEvent(QMouseEvent *event) override
@@ -130,7 +144,7 @@ private:
         update();
     }
 
-    static constexpr int kItemH = 30;
+    static constexpr int kItemH = 34;
     static constexpr int kVisible = 5;
 
     int m_min;
@@ -147,7 +161,7 @@ SettingsDialog::SettingsDialog(double workSec, double restSec, QWidget *parent)
     : QDialog(parent, Qt::Dialog | Qt::FramelessWindowHint)
 {
     setAttribute(Qt::WA_TranslucentBackground); // 圆角之外真正透明
-    setFixedSize(400, 400);
+    setFixedSize(420, 460);
     setWindowOpacity(0.0); // 弹出动画从全透明开始，避免首帧闪现
     setStyleSheet(QStringLiteral(
         "QLabel { color: #E8E8E8; background: transparent; }"
@@ -159,6 +173,10 @@ SettingsDialog::SettingsDialog(double workSec, double restSec, QWidget *parent)
 
     QLabel *titleLabel = new QLabel(QStringLiteral("设置"), this);
     titleLabel->setAlignment(Qt::AlignCenter);
+    QFont titleFont = titleLabel->font();
+    titleFont.setPixelSize(18);
+    titleFont.setBold(true);
+    titleLabel->setFont(titleFont);
 
     const auto secsToHms = [](double secs, int &h, int &m, int &s) {
         const int total = qBound(0, static_cast<int>(secs), 359999); // 滚筒上限 99:59:59
@@ -174,14 +192,21 @@ SettingsDialog::SettingsDialog(double workSec, double restSec, QWidget *parent)
         ws = new WheelPicker(0, 59, this);
         QHBoxLayout *row = new QHBoxLayout;
         row->setSpacing(6);
-        row->addWidget(new QLabel(name, this));
+        QLabel *nameLabel = new QLabel(name, this);
+        QFont nameFont = nameLabel->font();
+        nameFont.setPixelSize(15);
+        nameLabel->setFont(nameFont);
+        row->addWidget(nameLabel);
         row->addStretch();
         const auto addWheel = [this, row](WheelPicker *w, const QString &unit) {
             QVBoxLayout *col = new QVBoxLayout;
-            col->setSpacing(2);
+            col->setSpacing(6);
             QLabel *unitLabel = new QLabel(unit, this);
             unitLabel->setProperty("class", QStringLiteral("unit"));
             unitLabel->setAlignment(Qt::AlignCenter);
+            QFont unitFont = unitLabel->font();
+            unitFont.setPixelSize(12);
+            unitLabel->setFont(unitFont);
             col->addWidget(w, 0, Qt::AlignHCenter);
             col->addWidget(unitLabel);
             row->addLayout(col);
@@ -210,9 +235,9 @@ SettingsDialog::SettingsDialog(double workSec, double restSec, QWidget *parent)
     QVBoxLayout *layout = new QVBoxLayout(this);
     layout->setContentsMargins(24, 14, 24, 24);
     layout->addWidget(titleLabel);
-    layout->addSpacing(10);
+    layout->addSpacing(12);
     layout->addLayout(workRow);
-    layout->addSpacing(14);
+    layout->addSpacing(20);
     layout->addLayout(restRow);
     layout->addStretch(); // 「确定」落在中间偏下
     layout->addWidget(okButton, 0, Qt::AlignHCenter);
