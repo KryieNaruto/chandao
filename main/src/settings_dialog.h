@@ -19,6 +19,10 @@ public:
     double workSeconds() const;
     double restSeconds() const;
 
+public slots:
+    // × 关闭 / Esc：先播吸入式收缩动画再真正关闭
+    void reject() override;
+
 protected:
     void paintEvent(QPaintEvent *event) override;
     void showEvent(QShowEvent *event) override;
@@ -39,4 +43,5 @@ private:
 
     bool m_moving = false;
     QPoint m_moveOffset;
+    bool m_closing = false; // 吸入式关闭动画进行中（防重入）
 };

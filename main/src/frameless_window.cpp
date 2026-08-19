@@ -1,9 +1,11 @@
 #include "frameless_window.h"
 
 #include "focus_timer_widget.h"
+#include "genie_ghost.h"
 
 #include <QMouseEvent>
 #include <QResizeEvent>
+#include <QShowEvent>
 #include <QApplication>
 #include <QGuiApplication>
 #include <QScreen>
@@ -12,7 +14,23 @@
 #include <QMenu>
 #include <QAction>
 #include <QStyle>
+#include <QPropertyAnimation>
 #include <cmath>
+
+#ifdef Q_OS_WIN
+#  ifndef WIN32_LEAN_AND_MEAN
+#    define WIN32_LEAN_AND_MEAN
+#  endif
+#  ifndef NOMINMAX
+#    define NOMINMAX
+#  endif
+#  include <windows.h>
+#  include <dwmapi.h>
+#  ifndef DWMWA_TRANSITIONS_FORCEDISABLED
+#    define DWMWA_TRANSITIONS_FORCEDISABLED 3
+#  endif
+#  pragma comment(lib, "dwmapi.lib")
+#endif
 
 FramelessWindow::FramelessWindow(QWidget *parent)
     : QMainWindow(parent, Qt::FramelessWindowHint)
@@ -27,6 +45,18 @@ FramelessWindow::FramelessWindow(QWidget *parent)
 
     setupTray();
     setupRestAlert();
+
+#ifdef Q_OS_WIN
+    // 在首次显示前关掉 DWM 最小化/隐藏过渡，否则 hide() 会把真窗口缩成非正方形，
+    // FocusTimerWidget 按宽高重绘，点 × 瞬间闪出「布局错乱」。
+    createWinId();
+    {
+        BOOL disable = TRUE;
+        DwmSetWindowAttribute(reinterpret_cast<HWND>(winId()),
+                              DWMWA_TRANSITIONS_FORCEDISABLED,
+                              &disable, sizeof(disable));
+    }
+#endif
 
     // 初始尺寸取主屏幕面积 30% 的正方形，并居中
     QScreen *screen = QGuiApplication::primaryScreen();
@@ -61,6 +91,9 @@ void FramelessWindow::setupTray()
     // 左键/双击托盘图标恢复主窗口
     connect(m_trayIcon, &QSystemTrayIcon::activated, this,
             [this](QSystemTrayIcon::ActivationReason reason) {
+                if (m_hiding || m_popping) {
+                    return; // 动画进行中不恢复，避免几何/透明度状态竞争
+                }
                 if (reason == QSystemTrayIcon::Trigger
                     || reason == QSystemTrayIcon::DoubleClick) {
                     showNormal();
@@ -77,8 +110,8 @@ void FramelessWindow::setupRestAlert()
     // 并通过 QApplication::alert 触发任务栏闪烁提醒（窗口可见时仅闪烁）。
     connect(m_timerWidget, &FocusTimerWidget::phaseChanged, this,
             [this](int state) {
-                if (state != 1) {
-                    return;
+                if (state != 1 || m_hiding || m_popping) {
+                    return; // 动画进行中不恢复，避免几何/透明度状态竞争
                 }
                 if (!isVisible()) {
                     showNormal();
@@ -86,6 +119,63 @@ void FramelessWindow::setupRestAlert()
                 }
                 QApplication::alert(this);
             });
+}
+
+void FramelessWindow::hideToTray()
+{
+    if (m_hiding || m_popping) {
+        return; // 弹出动画进行中点 × 会捕捉到中间帧几何，导致恢复后位置漂移
+    }
+    m_hiding = true;
+
+    const QRect geo = geometry();
+    const QPoint target = m_timerWidget->closeButtonCenterGlobal();
+    QPixmap shot = grab();
+
+    auto *ghost = new GenieGhost(shot);
+    connect(ghost, &QWidget::destroyed, this, [this] { m_hiding = false; });
+
+    // 1) 快照以完整尺寸先盖住真窗口并刷新合成器
+    ghost->appearAt(geo);
+    // 2) 再藏真窗口：冻结绘制、禁止 resize 回正；不改 opacity（首次 setWindowOpacity
+    //    会给 HWND 加 WS_EX_LAYERED，窗口重建瞬间也会闪错乱布局）
+    setUpdatesEnabled(false);
+    hide();
+    setUpdatesEnabled(true); // 下次从托盘恢复时需要绘制；几何在 hide 期间未改
+    // 3) 真窗口已不可见后，才开始吸入，避免与 DWM 隐藏动画叠在一起
+    ghost->suckInto(target);
+}
+
+void FramelessWindow::showEvent(QShowEvent *event)
+{
+    QMainWindow::showEvent(event);
+    if (m_hiding || m_popping) {
+        return; // 关闭动画收尾 / 上一次弹出未结束，不重复触发
+    }
+    m_popping = true;
+    // 弹出：自中心 96% 放大 + 淡入
+    const QRect to = geometry();
+    const QPoint c = to.center();
+    const int side = static_cast<int>(to.width() * 0.96);
+    const QRect from(c.x() - side / 2, c.y() - side / 2, side, side);
+
+    auto *geom = new QPropertyAnimation(this, "geometry", this);
+    geom->setDuration(160);
+    geom->setStartValue(from);
+    geom->setEndValue(to);
+    geom->setEasingCurve(QEasingCurve::OutCubic);
+    geom->start(QAbstractAnimation::DeleteWhenStopped);
+
+    auto *fade = new QPropertyAnimation(this, "windowOpacity", this);
+    fade->setDuration(160);
+    fade->setStartValue(0.0);
+    fade->setEndValue(1.0);
+    fade->setEasingCurve(QEasingCurve::OutCubic);
+    fade->start(QAbstractAnimation::DeleteWhenStopped);
+
+    connect(geom, &QPropertyAnimation::finished, this, [this] {
+        m_popping = false;
+    });
 }
 
 int FramelessWindow::edgeHit(const QPoint &pos) const
@@ -133,6 +223,9 @@ void FramelessWindow::updateCursor(const QPoint &pos)
 
 void FramelessWindow::mousePressEvent(QMouseEvent *event)
 {
+    if (m_hiding) {
+        return; // 关闭动画进行中，屏蔽一切交互
+    }
     if (event->button() != Qt::LeftButton) {
         QMainWindow::mousePressEvent(event);
         return;
@@ -140,9 +233,9 @@ void FramelessWindow::mousePressEvent(QMouseEvent *event)
 
     const QPoint pos = event->pos();
 
-    // 关闭按钮优先于移动/缩放判定：点击不退出，隐藏到系统托盘
+    // 关闭按钮优先于移动/缩放判定：吸入式动画后隐藏到系统托盘
     if (m_timerWidget->closeButtonHit(pos)) {
-        hide();
+        hideToTray();
         return;
     }
     // 播放按钮 / 「...」按钮交给控件自己处理，不触发窗口拖拽
@@ -222,6 +315,12 @@ void FramelessWindow::applyResize(const QPoint &globalPos)
 
 void FramelessWindow::resizeEvent(QResizeEvent *event)
 {
+    // 关闭过程中若 DWM 仍送来非正方形 WM_SIZE，绝不能按短边回正，
+    // 否则表盘/按钮会按错误宽高重绘，点 × 瞬间闪错乱布局。
+    if (m_hiding) {
+        QMainWindow::resizeEvent(event);
+        return;
+    }
     // 程序性（非拖拽）resize 也保持正方形：以短边回正。
     // resize 内再 resize 会递归触发本函数，用宽高差判断收敛。
     const int w = event->size().width();

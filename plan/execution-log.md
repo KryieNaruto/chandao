@@ -244,3 +244,48 @@
 
 - 未执行 `cmake --install`，未做截图回归（`-t 1/1.5/3`）与人工观感验收（渐隐效果、与单位标签间距、文字大小、中部空白填充），由测试 Agent 负责。
 - 无阻塞。
+
+## 2026-08-19 交付执行（关闭动画改快照替身，消除布局闪帧）
+
+### 做了什么
+
+按 `plan/delivery-plan.md` 已确认的 3 项任务执行，仅改 `main/src/`：
+
+1. **抽出共用 GenieGhost**：将原先 `frameless_window.cpp` 匿名命名空间内的快照替身（`grab` 快照 + `suckInto` 吸入：20×20、InCubic、几何 220ms / 淡出 200ms、DPR 归一化绘制）抽到 header-only `main/src/genie_ghost.h`。`frameless_window.cpp` 与 `settings_dialog.cpp` 均 include 该头；已删除 cpp 内旧实现。未改 CMake。
+2. **主窗口 `hideToTray()`**：`grab()` 后立刻 `show`/`raise`/`repaint` 替身盖住真窗口，再 `setWindowOpacity(0)`（几何不动），Windows 下调用 `DwmSetWindowAttribute(DWMWA_TRANSITIONS_FORCEDISABLED)` 后才 `hide()`，然后播替身吸入。`hide()` 发生在 ghost `show()` 之后。恢复显示透明度仍由现有 `showEvent` 弹出动画负责。
+3. **设置窗 `reject()`**：改为同一套快照替身，不再对 `this` 做 `QPropertyAnimation(..., "geometry")`。动画期间只用 `setWindowOpacity(0)` 藏真窗、几何不动，不调用 `hide()`/`setVisible(false)`；替身 `destroyed` 后再 `QDialog::reject()`。`accept()` 未改。
+
+### 改了哪些文件
+
+- `main/src/genie_ghost.h`：新建，header-only 共用替身。
+- `main/src/frameless_window.cpp`：删除匿名命名空间 GenieGhost；`hideToTray()` 改为先盖替身再透明/禁 DWM 过渡/`hide()`。
+- `main/src/settings_dialog.cpp`：include 共用头；`reject()` 改替身吸入。
+- `plan/execution-log.md`：追加本段。
+
+未改：`frameless_window.h`、`settings_dialog.h`（接口无需变动）、`focus_timer_widget`、`main.cpp`、CMake。
+
+### 未做事项 / 阻塞
+
+- 未编译、未 `cmake --install`、未做截图回归（`-t 1/1.5/3`）与人工点 × 观感验收，由测试 Agent 负责。
+- 无阻塞。
+
+## 2026-08-19 交付执行 round 2 修复（关闭动画仍闪错乱布局）
+
+### 做了什么
+
+按用户复测 FAIL 做最小修复：
+
+1. `genie_ghost.h`：拆成 `appearAt`（完整尺寸上屏并刷新合成器）与 `suckInto`（从记录的起点矩形吸入）；绘制改为 `drawPixmap(rect(), snapshot)`，避免 DPR=2 时三参数重载只画出左上 1/4。
+2. `frameless_window.cpp`：构造时禁用 DWM 过渡；`hideToTray` 顺序改为 appearAt → hide → suckInto，去掉 `setWindowOpacity`（避免 HWND 被加成 layered 后闪帧）；`resizeEvent` 在 `m_hiding` 期间跳过短边回正。
+3. `settings_dialog.cpp`：`reject()` 同样先 appearAt 再透明再吸入。
+
+### 改了哪些文件
+
+- `main/src/genie_ghost.h`
+- `main/src/frameless_window.cpp`
+- `main/src/settings_dialog.cpp`
+
+### 未做事项 / 阻塞
+
+- 点 × 观感需用户确认。截图回归交测试 Agent。
+- 无阻塞。

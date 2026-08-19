@@ -32,6 +32,9 @@ public:
     bool playButtonHit(const QPoint &pos) const;
     bool dotsButtonHit(const QPoint &pos) const;
 
+    // 关闭按钮中心的全局坐标（吸入式关闭动画的收缩目标点）
+    QPoint closeButtonCenterGlobal() const;
+
     // 应用新的工作/休息时长（秒）。当前阶段：新时长 > 已用则续跑，
     // 已用 >= 新时长则立即切到下一阶段（信号规则与 updateTimer 一致）
     void setDurations(double workSec, double restSec);

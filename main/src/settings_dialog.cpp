@@ -1,5 +1,7 @@
 #include "settings_dialog.h"
 
+#include "genie_ghost.h"
+
 #include <QLabel>
 #include <QPushButton>
 #include <QHBoxLayout>
@@ -75,8 +77,7 @@ protected:
                        QString::number(m_min + i).rightJustified(2, QLatin1Char('0')));
         }
 
-        // 顶/底渐隐色带：背景色不透明 → 全透明，数字接近滚筒边缘时融入背景，
-        // 避免与下方「时/分/秒」单位标签视觉重叠
+        // 顶/底渐隐色带：数字接近滚筒边缘时融入背景
         const double fadeH = kItemH * 1.5;
         const QColor bg(0x2B, 0x2B, 0x2B);
         QLinearGradient topFade(0.0, 0.0, 0.0, fadeH);
@@ -165,7 +166,6 @@ SettingsDialog::SettingsDialog(double workSec, double restSec, QWidget *parent)
     setWindowOpacity(0.0); // 弹出动画从全透明开始，避免首帧闪现
     setStyleSheet(QStringLiteral(
         "QLabel { color: #E8E8E8; background: transparent; }"
-        "QLabel[class=\"unit\"] { color: #7A7A7A; }"
         "QPushButton { background: #55B2E8; color: #FFFFFF; border: none;"
         "              border-radius: 6px; padding: 10px 40px; }"
         "QPushButton:hover { background: #6CC0F0; }"
@@ -190,30 +190,35 @@ SettingsDialog::SettingsDialog(double workSec, double restSec, QWidget *parent)
         wh = new WheelPicker(0, 99, this);
         wm = new WheelPicker(0, 59, this);
         ws = new WheelPicker(0, 59, this);
+        // 单位放在滚筒外侧右侧，与选中行垂直居中，避免和数字抢同一格被裁切/遮挡
+        const auto makeUnit = [this](const QString &text) {
+            QLabel *lab = new QLabel(text, this);
+            QFont f = lab->font();
+            f.setPixelSize(14);
+            lab->setFont(f);
+            lab->setStyleSheet(QStringLiteral("color: #C8C8C8;"));
+            lab->setAlignment(Qt::AlignVCenter | Qt::AlignLeft);
+            return lab;
+        };
+        const auto addWheel = [&](QHBoxLayout *into, WheelPicker *wheel, const QString &unit) {
+            QHBoxLayout *group = new QHBoxLayout;
+            group->setSpacing(6);
+            group->setContentsMargins(0, 0, 0, 0);
+            group->addWidget(wheel);
+            group->addWidget(makeUnit(unit));
+            into->addLayout(group);
+        };
         QHBoxLayout *row = new QHBoxLayout;
-        row->setSpacing(6);
+        row->setSpacing(12);
         QLabel *nameLabel = new QLabel(name, this);
         QFont nameFont = nameLabel->font();
         nameFont.setPixelSize(15);
         nameLabel->setFont(nameFont);
         row->addWidget(nameLabel);
         row->addStretch();
-        const auto addWheel = [this, row](WheelPicker *w, const QString &unit) {
-            QVBoxLayout *col = new QVBoxLayout;
-            col->setSpacing(6);
-            QLabel *unitLabel = new QLabel(unit, this);
-            unitLabel->setProperty("class", QStringLiteral("unit"));
-            unitLabel->setAlignment(Qt::AlignCenter);
-            QFont unitFont = unitLabel->font();
-            unitFont.setPixelSize(12);
-            unitLabel->setFont(unitFont);
-            col->addWidget(w, 0, Qt::AlignHCenter);
-            col->addWidget(unitLabel);
-            row->addLayout(col);
-        };
-        addWheel(wh, QStringLiteral("时"));
-        addWheel(wm, QStringLiteral("分"));
-        addWheel(ws, QStringLiteral("秒"));
+        addWheel(row, wh, QStringLiteral("时"));
+        addWheel(row, wm, QStringLiteral("分"));
+        addWheel(row, ws, QStringLiteral("秒"));
         return row;
     };
 
@@ -307,6 +312,32 @@ void SettingsDialog::showEvent(QShowEvent *event)
     slide->setEndValue(pos());
     slide->setEasingCurve(QEasingCurve::OutCubic);
     slide->start(QAbstractAnimation::DeleteWhenStopped);
+}
+
+void SettingsDialog::reject()
+{
+    if (m_closing) {
+        QDialog::reject(); // 动画结束后的真正关闭
+        return;
+    }
+    m_closing = true;
+
+    const QRect geo = geometry();
+    const QPoint target = mapToGlobal(closeButtonRect().center());
+    QPixmap shot = grab();
+
+    auto *ghost = new GenieGhost(shot);
+    connect(ghost, &QWidget::destroyed, this, [this] {
+        QDialog::reject();
+    });
+
+    // 快照先完整上屏；模态 Dialog 不能 hide()（会提前 done），只能改透明度。
+    // 本窗已是 WA_TranslucentBackground，opacity 不会重建 HWND。
+    ghost->appearAt(geo);
+    setEnabled(false);
+    setUpdatesEnabled(false);
+    setWindowOpacity(0);
+    ghost->suckInto(target);
 }
 
 void SettingsDialog::mousePressEvent(QMouseEvent *event)

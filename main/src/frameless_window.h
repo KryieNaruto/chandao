@@ -24,6 +24,7 @@ protected:
     void mouseMoveEvent(QMouseEvent *event) override;
     void mouseReleaseEvent(QMouseEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
+    void showEvent(QShowEvent *event) override;
     bool event(QEvent *event) override;
 
 private:
@@ -32,6 +33,8 @@ private:
     void applyResize(const QPoint &globalPos);
     void setupTray();
     void setupRestAlert();
+    // 「吸入」式关闭：向右上角 × 收缩淡出后隐藏到托盘
+    void hideToTray();
 
     FocusTimerWidget *m_timerWidget;
     QSystemTrayIcon *m_trayIcon = nullptr;
@@ -52,4 +55,7 @@ private:
     QPoint m_moveOffset;     // 移动时指针相对窗口左上角的偏移
     QRect m_startGeometry;   // 缩放起始几何
     QPoint m_startGlobal;    // 缩放起始全局指针位置
+
+    bool m_hiding = false;   // 吸入式关闭动画进行中（屏蔽交互与弹出动画）
+    bool m_popping = false;  // 弹出动画进行中（期间禁止关闭，防止捕捉中间帧几何）
 };

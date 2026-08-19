@@ -211,6 +211,11 @@ bool FocusTimerWidget::dotsButtonHit(const QPoint &pos) const
     return dotsButtonRect().contains(pos);
 }
 
+QPoint FocusTimerWidget::closeButtonCenterGlobal() const
+{
+    return mapToGlobal(closeButtonRect().center());
+}
+
 void FocusTimerWidget::setDurations(double workSec, double restSec)
 {
     if (workSec <= 0.0 || restSec <= 0.0) {

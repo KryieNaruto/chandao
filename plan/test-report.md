@@ -1,3 +1,147 @@
+# 交付测试报告 — 关闭动画仍闪错乱布局 — Round 2 / 5
+
+- 测试时间：2026-08-19 15:10–15:12（UTC+8）
+- 测试环境：Windows 11 (26200)，PowerShell + Python / Pillow，显示器缩放 200%（DPR=2）
+- 截图工作目录：`D:\qsw\禅道\_shottest\round11`（本轮新建）
+- 对应变更：`plan/execution-log.md` 最新段「关闭动画仍闪错乱布局」——GenieGhost 拆 `appearAt`/`suckInto`；`paintEvent` 改两参数 `drawPixmap`；`hideToTray` 顺序 appearAt → hide → suckInto，去掉 `setWindowOpacity`，构造时禁 DWM 过渡；`resizeEvent` 在 `m_hiding` 时跳过短边回正；设置窗 `reject` 先 appearAt 再透明再吸入
+
+## 结论：**PASS**
+
+Release 构建与安装退出码均为 0，`_install/main.exe` 与 `_build\main\Release\main.exe` 均为 **99840** 字节、时间戳 **2026-08-19 15:08:27.208**（总监已编译，本轮 cmake 判定无需重编，install 为 Up-to-date）；截图回归 `-t 1 / 1.5 / 3` 全部退出码 0、严格 400×400，与基线 `_shottest/round7` 及 `_shottest/round10` 三张图像素 diff = **0**；源码审查确认 appearAt/suckInto 分步、两参数 drawPixmap、hideToTray 无 setWindowOpacity、构造时 DWMWA_TRANSITIONS_FORCEDISABLED、m_hiding 跳过短边回正、设置窗不对 this 做 geometry 动画；无参启动 5 秒进程仍在。主窗口/设置窗点 × 的观感为人工验证项，列入第 5 节，不影响判定。
+
+## 1. 构建与安装（Release）—— PASS
+
+| 命令 | 期望退出码 | 实际退出码 | 结果 |
+|---|---|---|---|
+| `cmake --build D:\qsw\禅道\_build --config Release` | 0 | 0（`main.vcxproj -> _build\main\Release\main.exe`，增量已最新） | PASS |
+| `cmake --install D:\qsw\禅道\_build --config Release` | 0 | 0（`-- Up-to-date: _install/main.exe` + windeployqt） | PASS |
+
+- `_build` 已配置，无需重新 cmake configure。
+- 产物佐证：`_install/main.exe` LastWriteTime **2026-08-19 15:08:27.208**，99840 字节，与 `_build\main\Release\main.exe` 一致；相对 round 1 安装产物（14:55:15 / 99328 字节）已更新，为本轮修复后的编译产物。
+- windeployqt 两条无害警告（缺 translations、缺 dxcompiler.dll），与既往轮次相同，不影响运行。
+
+## 2. 截图回归 —— PASS
+
+命令在 `_shottest\round11` 下以 `Start-Process -Wait -PassThru` 同步执行取真实退出码：
+
+| 命令 | 退出码 | 产物 | 尺寸 | 结果 |
+|---|---|---|---|---|
+| `_install\main.exe -t 1` | 0 | `shot_1.png`（17264 字节） | 严格 400×400（RGB） | PASS |
+| `_install\main.exe -t 1.5` | 0 | `shot_1.5.png`（17969 字节） | 严格 400×400（RGB） | PASS |
+| `_install\main.exe -t 3` | 0 | `shot_3.png`（18656 字节） | 严格 400×400（RGB） | PASS |
+
+像素对比（Python + PIL，RGBA 逐像素）：
+
+| 对比 | 差异像素数 | 结果 |
+|---|---|---|
+| round11/shot_1.png vs round7/shot_1.png | **0** | PASS |
+| round11/shot_1.5.png vs round7/shot_1.5.png | **0** | PASS |
+| round11/shot_3.png vs round7/shot_3.png | **0** | PASS |
+| round11/shot_1.png vs round10/shot_1.png | **0** | PASS |
+| round11/shot_1.5.png vs round10/shot_1.5.png | **0** | PASS |
+| round11/shot_3.png vs round10/shot_3.png | **0** | PASS |
+
+主窗口静态画面零回归成立（本轮只改关闭动画路径，`-t` 截图模式不创建 `FramelessWindow`/设置窗）。
+
+## 3. 代码审查 —— PASS
+
+对照本轮验收清单读源码（不以执行记录声称代替）。
+
+| 审查项 | 实际 | 结果 |
+|---|---|---|
+| GenieGhost 有 `appearAt` 与 `suckInto` 分步 | `genie_ghost.h`：`appearAt` 完整尺寸上屏并 `processEvents`/`DwmFlush`；`suckInto` 从 `m_startGeo` 吸入 20×20 | PASS |
+| `paintEvent` 使用两参数 `drawPixmap(rect(), snapshot)` | `p.drawPixmap(rect(), m_snapshot)`；注释明确不用 `deviceIndependentSize` 当三参数源矩形。全文件无三参数 `drawPixmap`、无 `deviceIndependentSize` 调用 | PASS |
+| `hideToTray`：appearAt → hide → suckInto | 顺序：`grab()` → `ghost->appearAt(geo)` → `setUpdatesEnabled(false)` → `hide()` → `setUpdatesEnabled(true)` → `ghost->suckInto(target)` | PASS |
+| `hideToTray` 无 `setWindowOpacity` | `hideToTray()` 内无 `setWindowOpacity` 调用；仅注释说明为何去掉 | PASS |
+| 构造时 `DWMWA_TRANSITIONS_FORCEDISABLED` | `FramelessWindow` 构造函数 `createWinId()` 后 `DwmSetWindowAttribute(..., DWMWA_TRANSITIONS_FORCEDISABLED, TRUE)` | PASS |
+| `resizeEvent` 在 `m_hiding` 时不做短边回正 | `if (m_hiding) { QMainWindow::resizeEvent(event); return; }`，短边 `resize(side, side)` 在此之后 | PASS |
+| `SettingsDialog::reject` 先 appearAt 再 opacity 0 再 suckInto | `ghost->appearAt(geo)` → `setEnabled(false)` → `setUpdatesEnabled(false)` → `setWindowOpacity(0)` → `ghost->suckInto(target)` | PASS |
+| 不对 `this` 做 geometry 动画 | `reject()` 内无 `QPropertyAnimation(this, "geometry")`。`QPropertyAnimation(this, …)` 仅出现在 `showEvent` 的 `windowOpacity` / `pos`（计划不改弹出）。geometry 动画只在 `GenieGhost::suckInto` 对替身 | PASS |
+| 设置窗动画期间不 `hide()`/`setVisible(false)` 真 Dialog | `reject()` 内无 `hide()`/`setVisible(false)`；`destroyed` 后再 `QDialog::reject()` | PASS |
+
+关键代码位置：`main/src/genie_ghost.h`、`FramelessWindow::hideToTray()` / 构造函数 / `resizeEvent`（`frameless_window.cpp`）、`SettingsDialog::reject()`（`settings_dialog.cpp`）。
+
+## 4. 无参启动稳定性 —— PASS
+
+- `Start-Process _install\main.exe`（无参数），pid=16344，启动时 `HasExited=False`。
+- 等待约 5 秒（15:12:12.624 → 15:12:17.713，elapsed 5089 ms）后 `HasExited=False`，`Get-Process -Name main` 计数 1，工作集约 62.6 MB，未崩溃。
+- 随后 `Stop-Process` 杀掉，无残留。
+
+## 5. 人工验证项（不影响 PASS/FAIL）
+
+- [ ] 主窗口点右上角 ×：只看到快照缩小吸入，表盘/按钮不重排，无「先闪一下再缩小」。
+- [ ] 设置窗点 ×：滚筒/按钮不重排；动画结束后才真正关闭。
+
+---
+
+# 交付测试报告 — 关闭动画改快照替身 — Round 1 / 5
+
+- 测试时间：2026-08-19 14:54–14:56（UTC+8）
+- 测试环境：Windows 11 (26200)，PowerShell + Python / Pillow，显示器缩放 200%（DPR=2）
+- 截图工作目录：`D:\qsw\禅道\_shottest\round10`（本轮新建）
+- 对应变更：`plan/execution-log.md` 最新段「关闭动画改快照替身」——抽出 `GenieGhost` 共用头；`hideToTray()` 先盖替身再透明/禁 DWM 过渡后 `hide()`；`SettingsDialog::reject()` 改为替身吸入，不再对真 Dialog 做 `geometry` 动画
+
+## 结论：**PASS**
+
+Release 构建与安装退出码均为 0，`_install/main.exe` 时间戳由 12:23:31 更新为 **14:55:15**；截图回归 `-t 1 / 1.5 / 3` 全部退出码 0、严格 400×400，与基线 `_shottest/round7` 三张图像素 diff = **0**；源码审查确认设置窗关闭不再对 `this` 做 geometry 动画、主窗口 `hide()` 前已不可见且几何未改、ghost 已先 `show()`、设置窗动画期间不 `hide()`/`setVisible(false)`；无参启动 5 秒进程仍在。主窗口/设置窗点 × 的观感为人工验证项，列入第 5 节，不影响判定。
+
+## 1. 构建与安装（Release）—— PASS
+
+| 命令 | 期望退出码 | 实际退出码 | 结果 |
+|---|---|---|---|
+| `cmake --build D:\qsw\禅道\_build --config Release` | 0 | 0（`frameless_window.cpp` / `settings_dialog.cpp` 重编译；`main.vcxproj -> _build\main\Release\main.exe`） | PASS |
+| `cmake --install D:\qsw\禅道\_build --config Release` | 0 | 0（`-- Installing: _install/main.exe` + windeployqt） | PASS |
+
+- `_build` 已配置（`CMakeCache.txt` 存在），无需重新 cmake configure。
+- 产物佐证：`_install/main.exe` LastWriteTime **2026-08-19 14:55:15.625**（安装前为 12:23:31.500），99328 字节，为本轮新构建安装产物。
+- windeployqt 两条无害警告（缺 translations、缺 dxcompiler.dll），与既往轮次相同，不影响运行。
+
+## 2. 截图回归 —— PASS
+
+命令在 `_shottest\round10` 下以 `Start-Process -Wait -PassThru` 同步执行取真实退出码：
+
+| 命令 | 退出码 | 产物 | 尺寸 | 结果 |
+|---|---|---|---|---|
+| `_install\main.exe -t 1` | 0 | `shot_1.png`（17264 字节） | 严格 400×400（RGB） | PASS |
+| `_install\main.exe -t 1.5` | 0 | `shot_1.5.png`（17969 字节） | 严格 400×400（RGB） | PASS |
+| `_install\main.exe -t 3` | 0 | `shot_3.png`（18656 字节） | 严格 400×400（RGB） | PASS |
+
+像素对比（Python + PIL，RGBA 逐像素，基线 `_shottest/round7`）：
+
+| 对比 | 差异像素数 | 结果 |
+|---|---|---|
+| round10/shot_1.png vs round7/shot_1.png | **0** | PASS |
+| round10/shot_1.5.png vs round7/shot_1.5.png | **0** | PASS |
+| round10/shot_3.png vs round7/shot_3.png | **0** | PASS |
+
+主窗口静态画面零回归成立（本轮只改关闭动画路径，`-t` 截图模式不创建 `FramelessWindow`/设置窗）。
+
+## 3. 代码审查 —— PASS
+
+对照 `plan/delivery-plan.md` 验收标准读源码（不以执行记录声称代替）。
+
+| 审查项 | 实际 | 结果 |
+|---|---|---|
+| `SettingsDialog::reject()` 不再对 `this` 做 `QPropertyAnimation(..., "geometry")` | `reject()` 对 `GenieGhost` 调用 `suckInto()`；真 Dialog 仅 `setWindowOpacity(0)`。`QPropertyAnimation(this, …)` 仅出现在 `showEvent` 的 `windowOpacity` / `pos` 弹出动画（计划明确不改弹出）。全仓库 `class GenieGhost` 仅 `genie_ghost.h` 一处 | PASS |
+| `hideToTray()` 在 `hide()` 之前真窗口已不可见且几何未改 | 顺序：`grab()` → ghost `setGeometry(geometry())` → `show()`/`raise()`/`repaint()` → `setWindowOpacity(0)`（无 `setGeometry`/`resize`）→ Windows 下 `DwmSetWindowAttribute(DWMWA_TRANSITIONS_FORCEDISABLED)` → 最后 `hide()` | PASS |
+| ghost 在真窗口消失前已 `show()` | `ghost->show()` 在 `setWindowOpacity(0)` 与 `hide()` 之前 | PASS |
+| 设置窗动画期间不 `hide()`/`setVisible(false)` 真 Dialog | `reject()` 内无 `hide()`/`setVisible(false)`；仅 `setEnabled(false)` + `setWindowOpacity(0)`；`destroyed` 后再 `QDialog::reject()` | PASS |
+
+关键代码位置：`main/src/genie_ghost.h`、`FramelessWindow::hideToTray()`（`frameless_window.cpp`）、`SettingsDialog::reject()`（`settings_dialog.cpp`）。
+
+## 4. 无参启动稳定性 —— PASS
+
+- `Start-Process _install\main.exe`（无参数），pid=28584，启动时 `HasExited=False`。
+- 等待约 5 秒（14:55:40.258 → 14:55:45.306）后 `HasExited=False`，`Get-Process -Name main` 计数 1，工作集约 37.5 MB，未崩溃。
+- 随后 `Stop-Process` 杀掉，无残留。
+
+## 5. 人工验证项（不影响 PASS/FAIL）
+
+- [ ] 主窗口点右上角 ×：只看到快照缩小吸入，表盘/按钮不重排，无「先闪一下再缩小」。
+- [ ] 设置窗点 ×：滚筒/按钮不重排；动画结束后才真正关闭。
+
+---
+
 # 交付测试报告 — 滚筒渐隐与设置窗文字放大 — Round 1 / 5
 
 - 测试时间：2026-08-19 10:58–11:05（UTC+8）
