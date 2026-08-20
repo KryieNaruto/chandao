@@ -18,8 +18,14 @@ add_executable(main WIN32
     src/frameless_window.cpp
     src/settings_dialog.h
     src/settings_dialog.cpp
+    src/plant/seed.h
+    src/plant/plant_scene.h
+    src/plant/plant_scene.cpp
+    src/plant/painter_plant_renderer.h
+    src/plant/painter_plant_renderer.cpp
 )
 
+target_include_directories(main PRIVATE src)
 target_link_libraries(main PRIVATE Qt6::Widgets)
 
 # Visual Studio 调试时自动把 Qt 的 bin 目录加入 PATH，避免提示缺少 Qt DLL
@@ -27,12 +33,67 @@ if(WIN32 AND MSVC)
     set_property(TARGET main PROPERTY VS_DEBUGGER_ENVIRONMENT "PATH=$<TARGET_FILE_DIR:Qt6::Core>;$(PATH)")
 endif()
 
-# Vulkan 为可选：有 SDK 则启用，没有也不要导致配置/编译失败
+# Vulkan 为可选：有 SDK（且能编 shader）则启用离屏渲染，没有也不要导致配置/编译失败
 find_package(Vulkan QUIET)
 if(Vulkan_FOUND)
-    message(STATUS "Vulkan found: ${Vulkan_LIBRARY}")
-    target_compile_definitions(main PRIVATE HAS_VULKAN)
-    target_link_libraries(main PRIVATE Vulkan::Vulkan)
+    find_program(GLSLANG_VALIDATOR
+        NAMES glslangValidator glslangValidator.exe
+        HINTS
+            "$ENV{VULKAN_SDK}/Bin"
+            "$ENV{VULKAN_SDK}/bin"
+            "${Vulkan_INCLUDE_DIR}/../Bin"
+            "${Vulkan_INCLUDE_DIR}/../bin"
+    )
+    if(GLSLANG_VALIDATOR)
+        message(STATUS "Vulkan found: ${Vulkan_LIBRARY}")
+        message(STATUS "glslangValidator: ${GLSLANG_VALIDATOR}")
+        target_compile_definitions(main PRIVATE HAS_VULKAN)
+        target_link_libraries(main PRIVATE Vulkan::Vulkan)
+        target_sources(main PRIVATE
+            src/plant/vulkan_plant_renderer.h
+            src/plant/vulkan_plant_renderer.cpp
+        )
+
+        set(_spirv_dir "${CMAKE_CURRENT_BINARY_DIR}/shaders")
+        file(MAKE_DIRECTORY "${_spirv_dir}")
+        file(WRITE "${_spirv_dir}/plant_shaders.qrc"
+"<RCC>
+  <qresource prefix=\"/shaders\">
+    <file alias=\"plant.vert.spv\">plant.vert.spv</file>
+    <file alias=\"plant.frag.spv\">plant.frag.spv</file>
+  </qresource>
+</RCC>
+")
+
+        add_custom_command(
+            OUTPUT "${_spirv_dir}/plant.vert.spv"
+            COMMAND "${GLSLANG_VALIDATOR}" -V "${CMAKE_CURRENT_SOURCE_DIR}/shaders/plant.vert"
+                    -o "${_spirv_dir}/plant.vert.spv"
+            DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/plant.vert"
+            COMMENT "Compiling plant.vert to SPIR-V"
+            VERBATIM
+        )
+        add_custom_command(
+            OUTPUT "${_spirv_dir}/plant.frag.spv"
+            COMMAND "${GLSLANG_VALIDATOR}" -V "${CMAKE_CURRENT_SOURCE_DIR}/shaders/plant.frag"
+                    -o "${_spirv_dir}/plant.frag.spv"
+            DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/plant.frag"
+            COMMENT "Compiling plant.frag to SPIR-V"
+            VERBATIM
+        )
+        add_custom_target(plant_shaders DEPENDS
+            "${_spirv_dir}/plant.vert.spv"
+            "${_spirv_dir}/plant.frag.spv"
+        )
+        # rcc 必须在 SPIR-V 生成之后运行
+        add_dependencies(main plant_shaders)
+        set_source_files_properties("${_spirv_dir}/plant_shaders.qrc" PROPERTIES
+            OBJECT_DEPENDS "${_spirv_dir}/plant.vert.spv;${_spirv_dir}/plant.frag.spv"
+        )
+        target_sources(main PRIVATE "${_spirv_dir}/plant_shaders.qrc")
+    else()
+        message(STATUS "Vulkan found but glslangValidator missing; building without HAS_VULKAN")
+    endif()
 else()
     message(STATUS "Vulkan SDK not found; building without HAS_VULKAN")
 endif()

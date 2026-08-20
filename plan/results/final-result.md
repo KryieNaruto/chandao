@@ -743,3 +743,58 @@ main.exe -t <秒数> [-s <边长>]
 - 设置窗「时 / 分 / 秒」与数字是否完全无遮挡需打开设置确认。
 - 渐隐色带颜色仍硬编码 `#2B2B2B`。
 - `_shottest/` 未纳入本次提交。
+
+## 中心植物生长（Vulkan）交付总结（2026-08-20）
+
+### 需求
+
+在已有 `CenterMode::Plant` 扩展位上新增可点击切换的扁平植物生长中心样式；本期只做小树种子「种子-发芽」（5 个时间阶段 / 6 个视觉态），使用离屏 Vulkan 渲染。
+
+### 做了什么
+
+- 种子注册表 + `PlantScene` 六段扁平几何（盆土 / 芽 / 叶 / 持续生长 / 树冠 / 树干）。
+- CMake 条件化 `HAS_VULKAN`：无 SDK 仍能编译；有 SDK 且有 `glslangValidator` 时编离屏 Vulkan 渲染器，SPIR-V 输出到构建目录。
+- `VulkanPlantRenderer`：OPTIMAL 附件 + layout barrier + staging 回读。
+- 点击表盘内圆在数字时间与植物模式间切换；「...」→「选择种子」；CLI `-t -c plant`。
+- 截图模式 Vulkan 失败：退出码 2，写 `plant-vulkan-failed.txt`，不保存 PNG。
+
+### 结果是什么
+
+- 验收：自动项 **通过**（测试轮次 2 / 5）。
+- 产物：`_install/main.exe` 已更新（Release，143360 字节，2026-08-20 10:45:27），链接 `vulkan-1.dll`。
+- 本机已安装 LunarG Vulkan SDK 1.4.357.0（`C:\VulkanSDK\1.4.357.0`）。
+
+### 测试结论（round 1，无 SDK）
+
+| 检查项 | 结果 |
+| --- | --- |
+| Release 构建 / 安装退出码 0 | 通过 |
+| `-t 1` / `1.5` / `3` 严格 400×400，蓝像素 1.5>1 | 通过 |
+| 无 SDK：`-c plant` 退出码 2 + `plant-vulkan-failed.txt` + 无充数 PNG | 通过 |
+| 圆心 accept/ignore、frameless 排除中心热区 | 通过 |
+| 无参启动 5 秒不崩溃 | 通过 |
+| 植物 6 态 Vulkan 出图趋势 | 当时环境阻塞 |
+
+### 测试结论（round 2，已装 SDK，PASS）
+
+| 检查项 | 结果 |
+| --- | --- |
+| CMake `Vulkan found` + 编入 `vulkan_plant_renderer.cpp` | 通过 |
+| TimeText `-t 1/1.5/3` 400×400，蓝像素与 round 1 一致 | 通过 |
+| `-c plant` 六张图退出码 0、400×400、无失败日志 | 通过 |
+| 绿像素 0.5→2→4→7.5：0 → 130 → 610 → 3812 | 通过 |
+| 7.5s 中心无时间字；9.5s 树干 + `00:00:01`；13s 树干 + 休息 `00:00:07` | 通过 |
+| 无参启动 5 秒不崩溃 | 通过 |
+| 点击圆心来回切、选种子菜单 | 人工项 |
+
+### 证据
+
+- 计划：`plan/delivery-plan.md`
+- 执行记录：`plan/execution-log.md`
+- 测试报告：`plan/test-report.md`（round 1 PASS 无 SDK；round 2 PASS 有 Vulkan）
+- 本文件：`plan/results/final-result.md`
+
+### 残留风险 / 人工验收项
+
+- 点击圆心切换、选种子菜单手感需你本地确认。
+- 阶段 6 时间字淡入色约为 (175,175,175)，不是满不透明 `#E8E8E8`，属计划内透明度。

@@ -4,6 +4,7 @@
 #include <QColor>
 #include <QTimer>
 #include <QPointF>
+#include <QString>
 
 // 表盘刻度样式参数。所有「*比」均相对窗口短边 min(w,h)，改这里即可整体调样式。
 // 调节建议：widthRatio 别超过 heightRatio 的一半，否则会糊成圆环；
@@ -27,10 +28,11 @@ public:
     // 确定性地将计时状态设置为指定秒数（按工作/休息循环取模），并停止内部定时器
     void setTime(double seconds);
 
-    // 供无边框窗口使用：命中右上角关闭按钮 / 播放按钮 / 「...」按钮热区
+    // 供无边框窗口使用：命中右上角关闭按钮 / 播放按钮 / 「...」按钮 / 圆心热区
     bool closeButtonHit(const QPoint &pos) const;
     bool playButtonHit(const QPoint &pos) const;
     bool dotsButtonHit(const QPoint &pos) const;
+    bool centerHit(const QPoint &pos) const;
 
     // 关闭按钮中心的全局坐标（吸入式关闭动画的收缩目标点）
     QPoint closeButtonCenterGlobal() const;
@@ -45,6 +47,12 @@ public:
     enum class CenterMode { TimeText, Plant };
     void setCenterMode(CenterMode mode);
     CenterMode centerMode() const { return m_centerMode; }
+    void setSeedId(const QString &id);
+    QString seedId() const { return m_seedId; }
+    // 截图 -c plant：必须走 Vulkan，失败则 lastPlantVulkanOk() 为 false
+    void setPlantVulkanRequired(bool required);
+    bool lastPlantVulkanOk() const { return m_lastPlantVulkanOk; }
+    QString lastPlantVulkanError() const { return m_lastPlantVulkanError; }
 
     // 当前阶段剩余秒数（供全屏休息提醒等外部组件显示倒计时）
     double remainingSeconds() const;
@@ -72,7 +80,10 @@ private:
     void drawDotsButton(QPainter &p);
     void drawCloseButton(QPainter &p);
     void drawCenterContent(QPainter &p);
-    void drawCenterTimeText(QPainter &p);
+    void drawCenterTimeText(QPainter &p, double alpha = 1.0);
+    void persistAppearance() const;
+    void showSeedMenu();
+    double workProgress() const;
     QRect buttonRect() const;
     QRect dotsButtonRect() const;
     QRect closeButtonRect() const;
@@ -105,4 +116,9 @@ private:
     bool m_dotsPressed = false;
     bool m_timerStopped = false; // setTime 停止定时器后置位，不再触发动画插值
     CenterMode m_centerMode = CenterMode::TimeText;
+    QString m_seedId = QStringLiteral("small_tree");
+    bool m_centerPressed = false;
+    bool m_plantVulkanRequired = false;
+    bool m_lastPlantVulkanOk = false;
+    QString m_lastPlantVulkanError;
 };

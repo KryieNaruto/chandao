@@ -238,8 +238,9 @@ void FramelessWindow::mousePressEvent(QMouseEvent *event)
         hideToTray();
         return;
     }
-    // 播放按钮 / 「...」按钮交给控件自己处理，不触发窗口拖拽
-    if (m_timerWidget->playButtonHit(pos) || m_timerWidget->dotsButtonHit(pos)) {
+    // 播放按钮 / 「...」按钮 / 圆心热区交给控件自己处理，不触发窗口拖拽
+    if (m_timerWidget->playButtonHit(pos) || m_timerWidget->dotsButtonHit(pos)
+        || m_timerWidget->centerHit(pos)) {
         QMainWindow::mousePressEvent(event);
         return;
     }

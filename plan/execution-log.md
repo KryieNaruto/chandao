@@ -289,3 +289,46 @@
 
 - 点 × 观感需用户确认。截图回归交测试 Agent。
 - 无阻塞。
+
+## 2026-08-20 交付执行（中心植物生长 Vulkan）
+
+### 做了什么
+
+1. Seed 注册表 + PlantScene：`timeStageCount=5` → 6 视觉态；Y 向上 NDC；色板按计划（盆/土/芽/叶/干）。
+2. CMake：`Vulkan QUIET`；仅 `Vulkan_FOUND` 且找到 `glslangValidator` 时定义 `HAS_VULKAN`、编 `vulkan_plant_renderer`、SPIR-V 输出到 `_build/main/shaders`、qrc `OBJECT_DEPENDS` 依赖 spv。无 SDK 仍能配置编译。
+3. VulkanPlantRenderer：DEVICE_LOCAL OPTIMAL 附件、renderpass 后 barrier 到 TRANSFER_SRC、staging 回读、Y 翻转、预乘 ARGB32；进程内静态单例；resize 重建 FB。
+4. FocusTimerWidget：圆心热区 accept（与 `drawRing` 同圆心/半径公式）；按下内圆后 move/release 不 ignore；阶段 6 QPainter 时间字；休息 `p=1`；交互 Vulkan 失败才 painter 回退。
+5. frameless_window：`centerHit` 与播放/「...」一样排除拖拽。
+6. 「...」菜单增加「选择种子」（先 close 再回调）；QSettings `centerMode`/`seedId`（截图模式先 `setTime` 再改模式，不写设置）。
+7. CLI `-c plant` / `--seed`；Vulkan 失败退出码 2，写 `plant-vulkan-failed.txt`，不保存 PNG。
+
+### 改了哪些文件
+
+- `main/CMakeLists.txt`
+- `main/src/main.cpp`
+- `main/src/focus_timer_widget.h/.cpp`
+- `main/src/frameless_window.cpp`（仅中心热区排除）
+- 新增 `main/src/plant/seed.h`、`plant_scene.h/.cpp`、`painter_plant_renderer.h/.cpp`、`vulkan_plant_renderer.h/.cpp`
+- 新增 `main/shaders/plant.vert`、`plant.frag`
+
+### 编译自检
+
+- `cmake -S . -B _build ...`：Vulkan SDK not found; building without HAS_VULKAN。
+- `cmake --build _build --config Release` 通过。
+
+### 未做事项 / 阻塞
+
+- 本机无 Vulkan SDK：植物 Vulkan 截图视觉验收为环境前置，不由执行 Agent 安装 SDK。
+- 完整验收（install、TimeText 回归、`-c plant` 失败码）交测试 Agent。
+
+## 2026-08-20 安装 Vulkan SDK 后复测
+
+### 做了什么
+
+- 静默安装 LunarG Vulkan SDK **1.4.357.0** 到 `C:\VulkanSDK\1.4.357.0`（`VULKAN_SDK` 已写入系统环境）。
+- 重新 configure：日志 `Vulkan found` + `glslangValidator`；编入 `vulkan_plant_renderer.cpp`；SPIR-V 编译成功。
+- Release 构建 + 安装：`_install/main.exe` 更新为 143360 字节，依赖 `vulkan-1.dll`。
+
+### 未做事项 / 阻塞
+
+- 无代码改动。验收交测试 Agent round 2。

@@ -1,5 +1,11 @@
 #include "focus_timer_widget.h"
 #include "settings_dialog.h"
+#include "plant/seed.h"
+#include "plant/plant_scene.h"
+#include "plant/painter_plant_renderer.h"
+#ifdef HAS_VULKAN
+#include "plant/vulkan_plant_renderer.h"
+#endif
 
 #include <QPainter>
 #include <QPainterPath>
@@ -11,6 +17,7 @@
 #include <QtMath>
 #include <cmath>
 #include <functional>
+#include <QDebug>
 
 // 各动画在 60fps 下的单帧步长：图标切换约 150ms，悬停/按压取相近量级的快响应
 static constexpr double kIconStep  = 0.016 / 0.150;
@@ -29,17 +36,18 @@ namespace {
 class DotsMenuPopup : public QWidget
 {
 public:
-    explicit DotsMenuPopup(const QStringList &items, QWidget *parent = nullptr)
+    explicit DotsMenuPopup(const QStringList &items, QWidget *parent = nullptr, int width = 140)
         : QWidget(parent, Qt::Popup | Qt::FramelessWindowHint | Qt::NoDropShadowWindowHint)
         , m_items(items)
         , m_hoverT(items.size(), 0.0)
+        , m_width(width)
     {
         // WA_TranslucentBackground 让圆角之外真正透明，否则四角露黑/灰
         setAttribute(Qt::WA_TranslucentBackground);
         setAttribute(Qt::WA_DeleteOnClose);
         setWindowOpacity(0.0); // 弹出动画从全透明开始，避免首帧闪现
         setMouseTracking(true);
-        setFixedSize(kWidth, kVPad * 2 + kItemH * m_items.size());
+        setFixedSize(m_width, kVPad * 2 + kItemH * m_items.size());
         m_timer = new QTimer(this);
         connect(m_timer, &QTimer::timeout, this, [this] { tick(); });
         m_timer->start(16); // 与主控件同为约 60fps 插值
@@ -84,7 +92,7 @@ protected:
         font.setPixelSize(13);
         p.setFont(font);
         for (int i = 0; i < m_items.size(); ++i) {
-            const QRectF itemRc(0.0, kVPad + i * kItemH, kWidth, kItemH);
+            const QRectF itemRc(0.0, kVPad + i * kItemH, m_width, kItemH);
             const double t = m_hoverT[i];
             if (t > 0.0) {
                 QColor hl(0x55, 0xB2, 0xE8);
@@ -148,17 +156,25 @@ private:
         update();
     }
 
-    static constexpr int kWidth = 120;
     static constexpr int kItemH = 30;
     static constexpr int kVPad = 6;
 
     QStringList m_items;
     QVector<double> m_hoverT;
     int m_hovered = -1;
+    int m_width = 140;
     QTimer *m_timer;
 };
 
 } // namespace
+
+#ifdef HAS_VULKAN
+static VulkanPlantRenderer &vkPlant()
+{
+    static VulkanPlantRenderer renderer;
+    return renderer;
+}
+#endif
 
 FocusTimerWidget::FocusTimerWidget(QWidget *parent)
     : QWidget(parent)
@@ -241,8 +257,63 @@ void FocusTimerWidget::setCenterMode(CenterMode mode)
 {
     if (m_centerMode != mode) {
         m_centerMode = mode;
+        persistAppearance();
         update();
     }
+}
+
+void FocusTimerWidget::setSeedId(const QString &id)
+{
+    const SeedDescriptor *seed = SeedRegistry::find(id);
+    const QString next = seed ? seed->id : QStringLiteral("small_tree");
+    if (m_seedId != next) {
+        m_seedId = next;
+        persistAppearance();
+        update();
+    }
+}
+
+void FocusTimerWidget::setPlantVulkanRequired(bool required)
+{
+    m_plantVulkanRequired = required;
+}
+
+void FocusTimerWidget::persistAppearance() const
+{
+    if (m_timerStopped) {
+        return;
+    }
+    QSettings settings(QStringLiteral("Chandao"), QStringLiteral("FocusTimer"));
+    settings.setValue(QStringLiteral("centerMode"),
+                      m_centerMode == CenterMode::Plant
+                          ? QStringLiteral("plant")
+                          : QStringLiteral("time"));
+    settings.setValue(QStringLiteral("seedId"), m_seedId);
+}
+
+double FocusTimerWidget::workProgress() const
+{
+    if (m_state != 0) {
+        return 1.0;
+    }
+    if (m_workDuration <= 0.0) {
+        return 0.0;
+    }
+    return qBound(0.0, m_elapsed / m_workDuration, 1.0);
+}
+
+bool FocusTimerWidget::centerHit(const QPoint &pos) const
+{
+    if (playButtonHit(pos) || dotsButtonHit(pos) || closeButtonHit(pos)) {
+        return false;
+    }
+    const double base = qMin(width(), height());
+    const TickStyle ts;
+    const QPointF c(width() * 0.5, height() * 0.4);
+    const double radius = base * (ts.ringRadius - ts.heightRatio * 0.5);
+    const double dx = pos.x() - c.x();
+    const double dy = pos.y() - c.y();
+    return dx * dx + dy * dy <= radius * radius;
 }
 
 double FocusTimerWidget::remainingSeconds() const
@@ -277,6 +348,8 @@ void FocusTimerWidget::mousePressEvent(QMouseEvent *event)
     } else if (dotsButtonRect().contains(event->pos())) {
         m_dotsPressed = true;
         update();
+    } else if (centerHit(event->pos())) {
+        m_centerPressed = true;
     } else {
         // 未命中按钮（含右上角 ×）：交还父窗口处理拖拽/关闭/边缘缩放
         event->ignore();
@@ -297,6 +370,14 @@ void FocusTimerWidget::mouseReleaseEvent(QMouseEvent *event)
             emit dotsClicked();
         }
         update();
+    } else if (m_centerPressed) {
+        m_centerPressed = false;
+        if (centerHit(event->pos())) {
+            setCenterMode(m_centerMode == CenterMode::Plant
+                              ? CenterMode::TimeText
+                              : CenterMode::Plant);
+        }
+        update();
     } else {
         event->ignore();
     }
@@ -313,6 +394,10 @@ void FocusTimerWidget::mouseMoveEvent(QMouseEvent *event)
         m_closeHovered = overClose;
         m_dotsHovered = overDots;
         update();
+    }
+    // 按下内圆后必须由子控件收 move/release，不要 ignore 把拖拽抢回去
+    if (m_centerPressed || m_buttonPressed || m_dotsPressed) {
+        return;
     }
     if (!overButton && !overClose && !overDots) {
         // 交还父窗口：边缘缩放光标依赖父级收到移动事件
@@ -496,7 +581,8 @@ void FocusTimerWidget::drawDotsButton(QPainter &p)
 
 void FocusTimerWidget::showDotsMenu()
 {
-    auto *popup = new DotsMenuPopup({ QStringLiteral("设置") }, this);
+    auto *popup = new DotsMenuPopup(
+        { QStringLiteral("设置"), QStringLiteral("选择种子") }, this, 140);
 
     // 弹出在「...」按钮正下方，水平居中对齐按钮
     const QRect rc = dotsButtonRect();
@@ -506,6 +592,28 @@ void FocusTimerWidget::showDotsMenu()
     popup->onTriggered = [this](int index) {
         if (index == 0) {
             openSettingsDialog();
+        } else if (index == 1) {
+            showSeedMenu();
+        }
+    };
+    popup->show();
+}
+
+void FocusTimerWidget::showSeedMenu()
+{
+    const QVector<SeedDescriptor> seeds = SeedRegistry::all();
+    QStringList names;
+    names.reserve(seeds.size());
+    for (const SeedDescriptor &s : seeds) {
+        names.push_back(s.displayName);
+    }
+    auto *popup = new DotsMenuPopup(names, this, 140);
+    const QRect rc = dotsButtonRect();
+    const QPoint anchor = mapToGlobal(QPoint(rc.center().x(), rc.bottom() + 6));
+    popup->move(anchor.x() - popup->width() / 2, anchor.y());
+    popup->onTriggered = [this, seeds](int index) {
+        if (index >= 0 && index < seeds.size()) {
+            setSeedId(seeds.at(index).id);
         }
     };
     popup->show();
@@ -589,15 +697,80 @@ void FocusTimerWidget::drawCenterContent(QPainter &p)
     case CenterMode::TimeText:
         drawCenterTimeText(p);
         break;
-    case CenterMode::Plant:
+    case CenterMode::Plant: {
+        const SeedDescriptor *seed = SeedRegistry::find(m_seedId);
+        const SeedDescriptor desc = seed ? *seed : SeedRegistry::smallTree();
+        const double pProg = workProgress();
+        const QVector<PlantVertex> mesh = PlantScene::build(desc, pProg);
+
+        const double base = qMin(width(), height());
+        const TickStyle ts;
+        const QPointF center(width() * 0.5, height() * 0.4);
+        const double radius = base * (ts.ringRadius - ts.heightRatio * 0.5);
+        const int logical = qMax(1, int(std::lround(radius * 2.0)));
+        const qreal dpr = qMax(1.0, devicePixelRatioF());
+        const int physical = qBound(1, int(std::ceil(logical * dpr)), 512);
+
+        m_lastPlantVulkanOk = false;
+        m_lastPlantVulkanError.clear();
+        bool drew = false;
+#ifdef HAS_VULKAN
+        VulkanPlantRenderer &vk = vkPlant();
+        if (!vk.isReady()) {
+            vk.init();
+        }
+        if (vk.isReady()) {
+            QImage img = vk.render(mesh, physical);
+            if (!img.isNull()) {
+                img.setDevicePixelRatio(double(physical) / double(logical));
+                p.save();
+                QPainterPath clip;
+                clip.addEllipse(center, radius, radius);
+                p.setClipPath(clip);
+                const QRectF dest(center.x() - logical * 0.5,
+                                  center.y() - logical * 0.5,
+                                  logical, logical);
+                p.setRenderHint(QPainter::SmoothPixmapTransform, true);
+                p.drawImage(dest, img);
+                p.restore();
+                m_lastPlantVulkanOk = true;
+                drew = true;
+            } else {
+                m_lastPlantVulkanError = vk.lastError();
+            }
+        } else {
+            m_lastPlantVulkanError = vk.lastError();
+        }
+#else
+        m_lastPlantVulkanError = QStringLiteral("HAS_VULKAN not enabled");
+#endif
+        if (!drew) {
+            if (m_plantVulkanRequired) {
+                // 截图模式禁止用回退图充数
+            } else {
+                qWarning("plant vulkan fallback: %s",
+                         qPrintable(m_lastPlantVulkanError));
+                drawPlantMesh(p, mesh, center, radius);
+            }
+        }
+
+        const PlantPhase ph = PlantScene::phaseOf(desc, pProg);
+        if (ph.index == ph.visualCount - 1) {
+            const double alpha = (m_state == 1) ? 1.0 : ph.localT;
+            drawCenterTimeText(p, alpha);
+        }
+        break;
+    }
     default:
-        // 植物模式预留
         break;
     }
 }
 
-void FocusTimerWidget::drawCenterTimeText(QPainter &p)
+void FocusTimerWidget::drawCenterTimeText(QPainter &p, double alpha)
 {
+    if (alpha <= 0.0) {
+        return;
+    }
     const double base = qMin(width(), height());
     // 与 drawRing 同一圆心，视觉居中于圆环内
     const QPointF center(width() * 0.5, height() * 0.4);
@@ -617,8 +790,9 @@ void FocusTimerWidget::drawCenterTimeText(QPainter &p)
     font.setPixelSize(static_cast<int>(base * 0.075));
     font.setBold(true);
     p.setFont(font);
-    // 工作阶段亮色，休息阶段与圆环同蓝
-    p.setPen(m_state == 0 ? QColor(0xE8, 0xE8, 0xE8) : m_activeColor);
+    QColor pen = (m_state == 0) ? QColor(0xE8, 0xE8, 0xE8) : m_activeColor;
+    pen.setAlphaF(qBound(0.0, alpha, 1.0));
+    p.setPen(pen);
 
     const double half = base * 0.22;
     p.drawText(QRectF(center.x() - half, center.y() - half, half * 2, half * 2),
