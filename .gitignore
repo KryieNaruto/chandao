@@ -1,6 +1,7 @@
 # 构建产物
 _build/
 _install/
+_shottest/
 
 # 临时凭证（不提交）
 .github_token
